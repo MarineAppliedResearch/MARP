@@ -121,9 +121,15 @@ if __name__ == "__main__":
 
     # Print final metrics
     print("\nFinal Metrics:")
-    print(f"Precision: {metrics['precision']:.3f}")
-    print(f"Recall: {metrics['recall']:.3f}")
-    print(f"mAP@50: {metrics['mAP50']:.3f}")
-    print(f"mAP@50-95: {metrics['mAP50-95']:.3f}")
+
+    print(metrics)  # Inspect the object
+    print(dir(metrics))  # List available attributes or methods
+
+
+    print(f"Precision: {metrics.precision:.3f}")
+    print(f"Recall: {metrics.recall:.3f}")
+    print(f"mAP@50: {metrics.mAP50:.3f}")
+    print(f"mAP@50-95: {metrics.mAP50_95:.3f}")
+
 
     print("Training and evaluation complete. Results saved in:", output_folder)
