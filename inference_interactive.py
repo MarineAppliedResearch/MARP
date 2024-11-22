@@ -10,7 +10,6 @@ Features:
 """
 
 from ultralytics import YOLO
-import yolov5
 import cv2
 import csv
 import os
@@ -22,6 +21,7 @@ from typing import Union, List, Optional
 import torch
 import tkinter as tk
 from tkinter import filedialog
+import functions
 
 def check_device():
     """
@@ -51,7 +51,7 @@ class YOLOv5:
     This class abstracts the YOLOv5 API to make predictions consistent with other YOLO versions.
     """
     def __init__(self, model_path: str, device: Optional[str] = None):
-        self.model = yolov5.load(model_path, device=device)
+        #self.model = yolov5.load(model_path, device=device)
         if isinstance(self.model, dict):
             self.model = self.model['model']
         if device:
@@ -124,6 +124,7 @@ if __name__ == "__main__":
     video_dir = os.path.dirname(video_path)
     output_video_path = os.path.join(video_dir, f"{os.path.basename(model_path).split('.')[0]}_output.mp4")
     csv_file_path = os.path.join(video_dir, f"{os.path.basename(model_path).split('.')[0]}_predictions.csv")
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))  # Get the total number of frames
 
     # Initialize video writer
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -146,6 +147,7 @@ if __name__ == "__main__":
         if isinstance(model, YOLOv5):
             predictions = model(frame)
         else:
+            functions.printSymbolBasedOnProgress(".", frame_count, total_frames)
             results = model(frame)
             predictions = []
             for result in results:
