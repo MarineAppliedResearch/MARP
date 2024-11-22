@@ -15,7 +15,7 @@ Usage:
 Dependencies:
 - Python 3.x
 - Ultralytics YOLO library
-- Matplotlib
+- Matplotliby
 """
 
 import os
@@ -24,66 +24,6 @@ import shutil
 import matplotlib.pyplot as plt
 
 import torch
-print("CUDA AVAILABLE: " + str(torch.cuda.is_available()))  # Should return True if CUDA is available
-print("Device Count: " + str(torch.cuda.device_count()))  # Number of GPUs available
-
-try:
-    print(torch.cuda.get_device_name(0))  # Name of the first GPU (if available)
-except Exception as e:
-    print(str(e))
-
-
-
-
-# Paths to dataset and model
-yolo_dataset_folder = "yolo_dataset"
-classnames_file = os.path.join(yolo_dataset_folder, "classnames.yaml")
-train_images_folder = os.path.join(yolo_dataset_folder, "train", "images")
-eval_images_folder = os.path.join(yolo_dataset_folder, "eval", "images")
-
-# Ensure the dataset and classnames file exist
-if not os.path.exists(yolo_dataset_folder) or not os.path.exists(classnames_file):
-    print("Error: `yolo_dataset` or `classnames.yaml` not found. Ensure the dataset is prepared.")
-    exit()
-
-# Model configuration
-model_name = "mbari-vulnerable-marine-ecosystems_3-11-24"  # Example: yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
-pretrained_weights = f"{model_name}.pt"  # Pre-trained weights
-epochs = 50  # Number of epochs for training
-batch_size = 16  # Batch size
-
-# Output paths
-output_folder = "yolo_training_output"
-os.makedirs(output_folder, exist_ok=True)
-
-# Load the model
-print(f"Loading pre-trained YOLO model: {model_name}")
-model = YOLO(pretrained_weights)
-
-device = "0" if torch.cuda.is_available() else "cpu"
-
-# Train the model
-print("Starting training...")
-
-results = model.train(
-    data=classnames_file,
-    epochs=epochs,
-    imgsz=640,
-    project=output_folder,
-    name="transfer_training",
-    device=device,  # Automatically use GPU if available, else fallback to CPU
-    batch=batch_size
-)
-
-# Evaluate the model
-print("Evaluating model...")
-metrics = model.val()
-
-# Generate evaluation charts
-print("Generating evaluation charts...")
-
-# Path to results
-training_results_file = os.path.join(output_folder, "transfer_training", "results.csv")
 
 # Ensure Matplotlib charts are saved
 def plot_training_results(results_file, output_folder):
@@ -107,16 +47,83 @@ def plot_training_results(results_file, output_folder):
     plt.savefig(chart_path)
     plt.close()
     print(f"Training metrics chart saved to {chart_path}")
+if __name__ == "__main__":
 
-# Generate training charts
-if os.path.exists(training_results_file):
-    plot_training_results(training_results_file, os.path.join(output_folder, "transfer_training"))
+    print("CUDA AVAILABLE: " + str(torch.cuda.is_available()))  # Should return True if CUDA is available
+    print("Device Count: " + str(torch.cuda.device_count()))  # Number of GPUs available
 
-# Print final metrics
-print("\nFinal Metrics:")
-print(f"Precision: {metrics['precision']:.3f}")
-print(f"Recall: {metrics['recall']:.3f}")
-print(f"mAP@50: {metrics['mAP50']:.3f}")
-print(f"mAP@50-95: {metrics['mAP50-95']:.3f}")
+    try:
+        print(torch.cuda.get_device_name(0))  # Name of the first GPU (if available)
+    except Exception as e:
+        print(str(e))
 
-print("Training and evaluation complete. Results saved in:", output_folder)
+
+
+
+    # Paths to dataset and model
+    yolo_dataset_folder = "yolo_dataset"
+    classnames_file = os.path.join(yolo_dataset_folder, "classnames.yaml")
+    train_images_folder = os.path.join(yolo_dataset_folder, "train", "images")
+    eval_images_folder = os.path.join(yolo_dataset_folder, "eval", "images")
+
+    # Ensure the dataset and classnames file exist
+    if not os.path.exists(yolo_dataset_folder) or not os.path.exists(classnames_file):
+        print("Error: `yolo_dataset` or `classnames.yaml` not found. Ensure the dataset is prepared.")
+        exit()
+
+    # Model configuration
+    model_name = "mbari-vulnerable-marine-ecosystems_3-11-24"  # Example: yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
+    pretrained_weights = f"{model_name}.pt"  # Pre-trained weights
+    epochs = 50  # Number of epochs for training
+    batch_size = 16  # Batch size
+
+    # Output paths
+    output_folder = "yolo_training_output"
+    os.makedirs(output_folder, exist_ok=True)
+
+    # Load the model
+    print(f"Loading pre-trained YOLO model: {model_name}")
+
+
+
+    model = YOLO(pretrained_weights)
+
+    device = "0" if torch.cuda.is_available() else "cpu"
+
+    # Train the model
+    print("Starting training...")
+
+    results = model.train(
+        data=classnames_file,
+        epochs=epochs,
+        imgsz=640,
+        project=output_folder,
+        name="transfer_training",
+        device=device,  # Automatically use GPU if available, else fallback to CPU
+        batch=batch_size
+    )
+
+    # Evaluate the model
+    print("Evaluating model...")
+    metrics = model.val()
+
+    # Generate evaluation charts
+    print("Generating evaluation charts...")
+
+    # Path to results
+    training_results_file = os.path.join(output_folder, "transfer_training", "results.csv")
+
+
+
+    # Generate training charts
+    if os.path.exists(training_results_file):
+        plot_training_results(training_results_file, os.path.join(output_folder, "transfer_training"))
+
+    # Print final metrics
+    print("\nFinal Metrics:")
+    print(f"Precision: {metrics['precision']:.3f}")
+    print(f"Recall: {metrics['recall']:.3f}")
+    print(f"mAP@50: {metrics['mAP50']:.3f}")
+    print(f"mAP@50-95: {metrics['mAP50-95']:.3f}")
+
+    print("Training and evaluation complete. Results saved in:", output_folder)

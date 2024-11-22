@@ -80,7 +80,7 @@ for video_name in video_files:
     
     try:
         
-        observations = functions.getObservationsByVideo()
+        observations = functions.getObservationsByVideo(video_name)
 
         # Open the video file for reading
         video_path = os.path.join(input_video_folder, video_name)

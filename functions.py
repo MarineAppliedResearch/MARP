@@ -3,7 +3,7 @@ import yaml
 from database_video_annotations import DatabaseVideoAnnotationsRangeFinder, AnnotationRectangle
 import requests
 
-api_base_url = 'http://localhost:3081/api/getObservationsByVideo'  # API endpoint base URL
+api_base_url = 'http://192.168.1.32:3081/api/getObservationsByVideo'  # API endpoint base URL
 data_yaml_path = 'data.yaml'               # Path to the data.yaml file containing class names
 
 # Initialize the range finder
@@ -97,5 +97,7 @@ def printSymbolBasedOnProgress(symbolToPrint, progress, totalPossibleProgress):
 
     # Reset the color back to default after printing
     print("\033[0m", end='', flush=True)
+
+
 
 
