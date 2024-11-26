@@ -1,3 +1,4 @@
+
 """
 Script to perform object tracking using ByteTrack and YOLOv8 on a user-selected video.
 The script allows the user to select the YOLOv8 model and a video dynamically through a file selection dialog.
@@ -20,9 +21,11 @@ import logging
 import warnings
 import numpy as np
 import torch
+from types import SimpleNamespace
+import functions
 import tkinter as tk
 from tkinter import filedialog
-from yolox.tracker.byte_tracker import BYTETracker  # ByteTrack tracker import
+from yolox.tracker.byte_tracker import BYTETracker
 
 
 def check_device():
@@ -86,6 +89,7 @@ if __name__ == "__main__":
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Output paths
     video_dir = os.path.dirname(video_path)
@@ -101,8 +105,16 @@ if __name__ == "__main__":
     csv_writer = csv.writer(csv_file)
     csv_writer.writerow(['frameNum', 'trackID', 'classNum', 'className', 'confidence', 'x1', 'y1', 'x2', 'y2'])
 
+    # Define ByteTrack parameters
+    args = SimpleNamespace(
+        track_thresh=0.5,    # Detection confidence threshold for tracking
+        match_thresh=0.8,    # Threshold for associating detections with tracks
+        track_buffer=30,     # Buffer for lost tracks
+        mot20=False          # Whether to use MOT20 settings
+    )
+
     # Initialize ByteTrack
-    tracker = BYTETracker()
+    tracker = BYTETracker(args)
 
     frame_count = 0
     print("Starting video processing...")
@@ -111,6 +123,9 @@ if __name__ == "__main__":
         ret, frame = cap.read()
         if not ret:
             break
+
+        if frame_count % 750 == 0:
+            functions.printSymbolBasedOnProgress(".", frame_count, total_frames)
 
         # Run inference on the frame
         results = model(frame)
@@ -131,10 +146,26 @@ if __name__ == "__main__":
         detections = []
         for pred in predictions:
             x1, y1, x2, y2 = pred['bbox']
-            detections.append([x1, y1, x2, y2, pred['confidence'], pred['class']])
+            confidence = pred['confidence']
+            class_id = pred['class']
+            detections.append([x1, y1, x2, y2, confidence, class_id])  # Format: [x1, y1, x2, y2, score, class_id]
+
+        # Skip tracking if no detections
+        if len(detections) == 0:
+            output_video.write(frame)
+            frame_count += 1
+            continue
+
+        # Prepare tracking parameters
+        img_size = (frame.shape[0], frame.shape[1])  # (height, width)
+        img_info = {"height": frame.shape[0], "width": frame.shape[1], "raw_img": frame}
+
+        # Convert detections to PyTorch tensor
+        output_results = torch.tensor(detections, dtype=torch.float32)
 
         # Update tracker
-        tracked_objects = tracker.update(np.array(detections), frame.shape)
+        tracked_objects = tracker.update(output_results, img_info, img_size)
+
 
         # Annotate frame and write tracking results
         for obj in tracked_objects:
@@ -142,7 +173,7 @@ if __name__ == "__main__":
             x1, y1, x2, y2 = map(int, obj.tlbr)
             class_id = obj.cls
             confidence = obj.score
-            class_name = obj.name
+            class_name = model.names[class_id] if hasattr(model, 'names') else "Unknown"
 
             # Draw bounding box and track ID
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -154,6 +185,11 @@ if __name__ == "__main__":
 
         # Write the annotated frame to the output video
         output_video.write(frame)
+
+        # Print progress
+        if frame_count % 750 == 0:
+            print(f"Processed frame {frame_count}/{total_frames} frames.")
+
         frame_count += 1
 
     # Cleanup
@@ -164,3 +200,4 @@ if __name__ == "__main__":
 
     print(f"Output saved: {output_video_path}")
     print(f"Tracking results saved: {csv_file_path}")
+

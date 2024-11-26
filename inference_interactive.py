@@ -147,7 +147,9 @@ if __name__ == "__main__":
         if isinstance(model, YOLOv5):
             predictions = model(frame)
         else:
-            functions.printSymbolBasedOnProgress(".", frame_count, total_frames)
+            # Provide a progress update every 60 seconds of video frames
+            if frame_count % 1500 == 0:
+                functions.printSymbolBasedOnProgress(".", frame_count, total_frames)
             results = model(frame)
             predictions = []
             for result in results:

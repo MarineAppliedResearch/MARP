@@ -72,9 +72,9 @@ if __name__ == "__main__":
         exit()
 
     # Model configuration
-    model_name = "mbari-vulnerable-marine-ecosystems_3-11-24"  # Example: yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
+    model_name = "mare-cucumber"  # Example: yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
     pretrained_weights = f"{model_name}.pt"  # Pre-trained weights
-    epochs = 50  # Number of epochs for training
+    epochs = 300  # Number of epochs for training
     batch_size = 16  # Batch size
 
     # Output paths
