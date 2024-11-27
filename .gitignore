@@ -13,6 +13,12 @@ dataset/
 yolo_dataset/
 yolo_training_output/
 *.pt
+20210614_153913 Fwd.mp4
+cucumber_videos/
+test_video/
+test_video_mare-starfish_anenome_cucumber_11_27_24/
+yolo_dataset_cumuberModel/
+
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

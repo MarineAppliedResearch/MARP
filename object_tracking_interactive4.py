@@ -26,9 +26,10 @@ def calculate_iou(box1, box2):
 
 class Args:
     def __init__(self):
-        self.track_thresh = 0.5
+        self.confidence_threshold = 0.6
+        self.track_thresh = 0.45
         self.match_thresh = 0.8
-        self.track_buffer = 30
+        self.track_buffer = 60
         self.mot20 = False
 
 def select_folder():
@@ -47,12 +48,15 @@ def batch_videos(video_files, batch_size):
             break
         yield batch
 
-def process_video(video_path, yolo_model_path, tracker, view_videos):
+def process_video(video_path, yolo_model_path, view_videos):
     try:
         print(f"Processing video: {os.path.basename(video_path)}")
 
         # Load a separate YOLO model instance for each thread
         model = YOLO(yolo_model_path).to('cuda' if torch.cuda.is_available() else 'cpu')
+
+        # Create a separate tracker instance for each thread
+        tracker = BYTETracker(Args())
 
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
@@ -162,6 +166,7 @@ def process_video(video_path, yolo_model_path, tracker, view_videos):
 
 
 
+
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def main():
@@ -182,10 +187,6 @@ def main():
 
     view_videos = messagebox.askyesno("View Videos", "Do you want to view the videos while processing?")
 
-    model = YOLO(yolo_model_path).to('cuda' if torch.cuda.is_available() else 'cpu')
-
-    tracker = BYTETracker(Args())
-
     video_files = [
         os.path.join(video_folder, f)
         for f in os.listdir(video_folder)
@@ -196,23 +197,22 @@ def main():
         print("No video files found in the selected folder.")
         return
 
-    print(f"Found {len(video_files)} video(s) in the folder. Starting processing in batches of 4...")
+    print(f"Found {len(video_files)} video(s) in the folder. Starting processing in batches of 2...")
 
-    batch_size = 4
+    batch_size = 2
     for batch in batch_videos(video_files, batch_size):
         with ThreadPoolExecutor(max_workers=batch_size) as executor:
-            # Submit each video in the batch as a separate task
             futures = [
-                executor.submit(process_video, video, yolo_model_path, tracker, view_videos)
+                executor.submit(process_video, video, yolo_model_path, view_videos)
                 for video in batch
             ]
 
-            # Wait for all tasks in the batch to complete
             for future in as_completed(futures):
                 try:
-                    future.result()  # Trigger any exceptions raised during processing
+                    future.result()
                 except Exception as e:
                     print(f"Error in video processing task: {e}")
+
 
 
 if __name__ == "__main__":

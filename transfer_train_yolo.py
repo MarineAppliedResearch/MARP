@@ -72,9 +72,9 @@ if __name__ == "__main__":
         exit()
 
     # Model configuration
-    model_name = "mare-cucumber"  # Example: yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
+    model_name = "mare-starfish_anenome_cucumber"  # Example: yolov8n, yolov8s, yolov8m, yolov8l, yolov8x
     pretrained_weights = f"{model_name}.pt"  # Pre-trained weights
-    epochs = 300  # Number of epochs for training
+    epochs = 20  # Number of epochs for training
     batch_size = 16  # Batch size
 
     # Output paths
@@ -93,7 +93,8 @@ if __name__ == "__main__":
     # Train the model
     print("Starting training...")
 
-    results = model.train(
+    try:
+        results = model.train(
         data=classnames_file,
         epochs=epochs,
         imgsz=640,
@@ -101,35 +102,39 @@ if __name__ == "__main__":
         name="transfer_training",
         device=device,  # Automatically use GPU if available, else fallback to CPU
         batch=batch_size
-    )
+        )
 
-    # Evaluate the model
-    print("Evaluating model...")
-    metrics = model.val()
+        # Evaluate the model
+        print("Evaluating model...")
+        metrics = model.val()
 
-    # Generate evaluation charts
-    print("Generating evaluation charts...")
+        # Generate evaluation charts
+        print("Generating evaluation charts...")
 
-    # Path to results
-    training_results_file = os.path.join(output_folder, "transfer_training", "results.csv")
-
-
-
-    # Generate training charts
-    if os.path.exists(training_results_file):
-        plot_training_results(training_results_file, os.path.join(output_folder, "transfer_training"))
-
-    # Print final metrics
-    print("\nFinal Metrics:")
-
-    print(metrics)  # Inspect the object
-    print(dir(metrics))  # List available attributes or methods
+        # Path to results
+        training_results_file = os.path.join(output_folder, "transfer_training", "results.csv")
 
 
-    print(f"Precision: {metrics.precision:.3f}")
-    print(f"Recall: {metrics.recall:.3f}")
-    print(f"mAP@50: {metrics.mAP50:.3f}")
-    print(f"mAP@50-95: {metrics.mAP50_95:.3f}")
+
+        # Generate training charts
+        if os.path.exists(training_results_file):
+            plot_training_results(training_results_file, os.path.join(output_folder, "transfer_training"))
+
+        # Print final metrics
+        print("\nFinal Metrics:")
+
+        print(metrics)  # Inspect the object
+        print(dir(metrics))  # List available attributes or methods
 
 
-    print("Training and evaluation complete. Results saved in:", output_folder)
+        print(f"Precision: {metrics.precision:.3f}")
+        print(f"Recall: {metrics.recall:.3f}")
+        print(f"mAP@50: {metrics.mAP50:.3f}")
+        print(f"mAP@50-95: {metrics.mAP50_95:.3f}")
+
+
+        print("Training and evaluation complete. Results saved in:", output_folder)
+    except Exception as e:
+
+         print("There was an exception" + str(e))
+    

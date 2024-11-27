@@ -160,7 +160,7 @@ for video_name, observations in annotations_by_video.items():
             break
 
         # Provide a progress update every 200 frames
-        if frame_index % 50 == 0:
+        if frame_index % 1500 == 0:
             functions.printSymbolBasedOnProgress(".", frame_index, total_frames)
 
         # Track annotations for the current frame
