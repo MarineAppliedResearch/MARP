@@ -2,6 +2,7 @@ import cv2
 import yaml
 from database_video_annotations import DatabaseVideoAnnotationsRangeFinder, AnnotationRectangle
 import requests
+import urllib.parse
 
 api_base_url = 'http://192.168.1.32:3081/api/getObservationsByVideo'  # API endpoint base URL
 data_yaml_path = 'data.yaml'               # Path to the data.yaml file containing class names
@@ -9,6 +10,77 @@ data_yaml_path = 'data.yaml'               # Path to the data.yaml file containi
 # Initialize the range finder
 range_finder = DatabaseVideoAnnotationsRangeFinder()
 
+
+def getObservationsWithKeyframesByComnames(comname_list):
+    """
+    Fetches observations that have associated keyframes and match the provided comname list.
+
+    :param comname_list: A list of comnames (strings) to filter observations.
+    :type comname_list: list
+    :return: A list of observations if the request is successful, otherwise an empty list.
+    :rtype: list
+    """
+    url = "http://localhost:3081/api/getObservationsWithKeyframesByComnames"
+    try:
+        if not comname_list or not isinstance(comname_list, list):
+            print("Invalid comname_list provided. Must be a non-empty list of strings.")
+            return []
+
+        # Join the list of comnames without additional encoding
+        query_string = {"comnameList": ",".join(comname_list)}
+        
+        # Send the GET request to the API with the query parameter
+        response = requests.get(url, params=query_string)
+        response.raise_for_status()
+        
+        # Parse the JSON response
+        observations = response.json()
+        if not isinstance(observations, list):
+            print("Unexpected API response format. Expected a list of observations.")
+            return []
+        return observations
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching observations with keyframes by comnames: {e}")
+        return []
+
+
+def getDistinctComnamesWithKeyframes():
+    """
+    Fetches a list of distinct comnames (common names) that have associated keyframes.
+
+    This function sends an HTTP GET request to the API endpoint
+    `http://localhost:3081/api/getDistinctComnamesWithKeyframes` and retrieves a list of
+    comnames with associated keyframes. If the API request fails or the response format
+    is invalid, it handles the error gracefully and returns an empty list.
+
+    :return: A list of distinct comnames (strings) if the request is successful, otherwise an empty list.
+    :rtype: list
+    """
+    # Define the API endpoint URL
+    url = "http://localhost:3081/api/getDistinctComnamesWithKeyframes"
+    
+    try:
+        # Send a GET request to the API
+        response = requests.get(url)
+        
+        # Raise an HTTPError if the status code indicates a failure (e.g., 4xx or 5xx)
+        response.raise_for_status()
+        
+        # Parse the JSON response from the API
+        comnames = response.json()
+        
+        # Check if the API response is in the expected format (a list of strings)
+        if not isinstance(comnames, list):
+            print("Unexpected API response format. Expected a list of comnames.")
+            return []  # Return an empty list if the response format is invalid
+        
+        # Return the list of comnames if everything is successful
+        return comnames
+    
+    except requests.exceptions.RequestException as e:
+        # Catch any exceptions related to the HTTP request (e.g., connection errors, timeouts)
+        print(f"Error fetching distinct comnames: {e}")
+        return []  # Return an empty list in case of an error
 
 def getObservationsByVideo(video_name):
         
