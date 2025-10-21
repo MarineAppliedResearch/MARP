@@ -1,3 +1,6 @@
+
+import sys
+sys.path.append('./ByteTrack')  # or the absolute path if needed
 import os
 import cv2
 import csv
@@ -8,6 +11,15 @@ from ultralytics import YOLO
 from tkinter import Tk, filedialog, messagebox
 from yolox.tracker.byte_tracker import BYTETracker
 from itertools import islice
+import math
+
+COMNAME_TO_TAXSERIAL = {
+    "California sea cucumber": 158344,
+    "Rockfish": 123456,
+    "Sea star": 987654,
+    # add more...
+}
+
 
 # Alias np.float to handle deprecated usage
 if not hasattr(np, 'float'):
@@ -26,11 +38,11 @@ def calculate_iou(box1, box2):
 
 class Args:
     def __init__(self):
-        self.confidence_threshold = 0.6
-        self.track_thresh = 0.45
-        self.match_thresh = 0.8
-        self.track_buffer = 60
-        self.mot20 = False
+        self.confidence_threshold = 0.35
+        self.track_thresh = 0.30
+        self.match_thresh = 0.60
+        self.track_buffer = 120
+        self.mot20 = True
 
 def select_folder():
     root = Tk()
@@ -48,7 +60,7 @@ def batch_videos(video_files, batch_size):
             break
         yield batch
 
-def process_video(video_path, yolo_model_path, view_videos):
+def process_video(video_path, yolo_model_path, view_videos, position=None, tile_size=None):
     try:
         print(f"Processing video: {os.path.basename(video_path)}")
 
@@ -68,9 +80,17 @@ def process_video(video_path, yolo_model_path, view_videos):
         frame_rate = int(cap.get(cv2.CAP_PROP_FPS))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
-        # Create output filenames
-        output_video_path = os.path.splitext(video_path)[0] + "_output.mp4"
-        csv_file_path = os.path.splitext(video_path)[0] + "_output.csv"
+        model_name = os.path.splitext(os.path.basename(yolo_model_path))[0]  # Strip path and extension
+
+        # Create the output directory based on the model name
+        output_folder = os.path.join(os.path.dirname(video_path), model_name)
+        os.makedirs(output_folder, exist_ok=True)  # Ensure the folder exists
+
+        # Create output filenames inside the output folder
+        base_name = os.path.splitext(os.path.basename(video_path))[0]  # Extract the video filename without extension
+        output_video_path = os.path.join(output_folder, f"{base_name}_output.mp4")
+        csv_file_path = os.path.join(output_folder, f"{base_name}_output.csv")
+
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
         out = cv2.VideoWriter(output_video_path, fourcc, frame_rate, (frame_width, frame_height))
 
@@ -79,14 +99,18 @@ def process_video(video_path, yolo_model_path, view_videos):
         display_height = frame_height // 2
 
         if view_videos:
-            # Set the window title with video name and model name
             window_title = f"{os.path.basename(video_path)} - YOLOv8 Model"
             cv2.namedWindow(window_title, cv2.WINDOW_NORMAL)
-            cv2.resizeWindow(window_title, display_width, display_height)
+
+            if tile_size and position:
+                tile_width, tile_height = tile_size
+                col, row = position
+                cv2.resizeWindow(window_title, tile_width, tile_height)
+                cv2.moveWindow(window_title, col * tile_width, row * tile_height)
 
         with open(csv_file_path, mode='w', newline='') as csvfile:
             csv_writer = csv.writer(csvfile)
-            csv_writer.writerow(["Frame", "Object Name", "Track_ID", "X", "Y", "Width", "Height"])
+            csv_writer.writerow(["Frame", "Object Name", "Track_ID", "X", "Y", "Width", "Height", "Confidence"])
 
             frame_idx = 0
 
@@ -95,7 +119,7 @@ def process_video(video_path, yolo_model_path, view_videos):
                 if not ret:
                     break
 
-                print(f"Processing Frame {frame_idx + 1} of {total_frames} for {os.path.basename(video_path)}...")
+                #print(f"Processing Frame {frame_idx + 1} of {total_frames} for {os.path.basename(video_path)}...")
 
                 # YOLOv8 detection
                 results = model(frame)
@@ -121,11 +145,11 @@ def process_video(video_path, yolo_model_path, view_videos):
                         for i, det_box in enumerate(detections.boxes.xyxy.cpu().numpy()):
                             det_x1, det_y1, det_x2, det_y2 = det_box[:4]
                             iou = calculate_iou((x1, y1, x2, y2), (det_x1, det_y1, det_x2, det_y2))
-                            if iou > 0.5:
-                                track_id_to_class_id[track_id] = int(detections.boxes.cls.cpu().numpy()[i])
+                            if iou > 0.4:
+                                track_id_to_class_id[track_id] = (int(detections.boxes.cls.cpu().numpy()[i]), detections.boxes.conf.cpu().numpy()[i])
                                 break
 
-                    class_id = track_id_to_class_id.get(track_id, -1)
+                    class_id, confidence = track_id_to_class_id.get(track_id, (-1, 0.0))
                     object_name = model.names[class_id] if class_id != -1 else "Unknown"
 
                     # Normalize bounding box
@@ -134,7 +158,7 @@ def process_video(video_path, yolo_model_path, view_videos):
                     width = (x2 - x1) / frame_width
                     height = (y2 - y1) / frame_height
 
-                    csv_writer.writerow([frame_idx, object_name, track_id, xCenter, yCenter, width, height])
+                    csv_writer.writerow([frame_idx, object_name, track_id, xCenter, yCenter, width, height, confidence])
 
                     # Draw bounding box and labels
                     cv2.rectangle(frame, (x1, y1), (x2, y2), (255, 0, 0), 2)
@@ -199,19 +223,26 @@ def main():
 
     print(f"Found {len(video_files)} video(s) in the folder. Starting processing in batches of 2...")
 
-    batch_size = 2
+    screen_width, screen_height = 1920, 1080  # adjust or detect
+    batch_size = 4
+    cols = math.ceil(math.sqrt(batch_size))
+    rows = math.ceil(batch_size / cols)
+    tile_size = (screen_width // cols, screen_height // rows)
+
     for batch in batch_videos(video_files, batch_size):
         with ThreadPoolExecutor(max_workers=batch_size) as executor:
-            futures = [
-                executor.submit(process_video, video, yolo_model_path, view_videos)
-                for video in batch
-            ]
-
-            for future in as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    print(f"Error in video processing task: {e}")
+            futures = []
+            for idx, video in enumerate(batch):
+                col = idx % cols
+                row = idx // cols
+                futures.append(executor.submit(
+                    process_video,
+                    video,
+                    yolo_model_path,
+                    view_videos,
+                    (col, row),
+                    tile_size
+                ))
 
 
 

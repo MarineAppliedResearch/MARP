@@ -60,11 +60,11 @@ def select_comnames(comname_list):
 
     root = tk.Tk()
     root.title("Select Comnames")
-    root.geometry("400x300")
+    root.geometry("400x600")
 
     ttk.Label(root, text="Select comnames to include:", font=("Arial", 12)).pack(pady=10)
 
-    comname_listbox = tk.Listbox(root, selectmode="multiple", width=50, height=15)
+    comname_listbox = tk.Listbox(root, selectmode="multiple", width=50, height=20)
     for comname in comname_list:
         comname_listbox.insert(tk.END, comname)
     comname_listbox.pack(pady=10)
@@ -99,8 +99,8 @@ for obs in observations:
     annotations_by_video.setdefault(video_name, []).append(obs)
 
 # Set paths for input videos and output dataset folders
-input_video_folder = "input_video"
-output_dataset_folder = "yolo_dataset"
+input_video_folder = "C:/Users/isaac/Videos/AI_VIDEO"
+output_dataset_folder = "yolo_dataset_campa2025_test6"
 classnames_file = os.path.join(output_dataset_folder, "classnames.yaml")
 
 # Subfolders for training and evaluation data
@@ -275,6 +275,7 @@ for video_name, observations in annotations_by_video.items():
                     # Validate frame before saving
                     if cropped_annotation.size > 0:
                         cv2.imwrite(human_review_path, cropped_annotation)
+                        p = 1
                     else:
                         print(f"Empty cropped annotation for {human_review_filename}. Skipping save.")
 

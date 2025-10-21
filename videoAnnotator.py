@@ -46,8 +46,8 @@ from database_video_annotations import DatabaseVideoAnnotationsRangeFinder, Anno
 
 
 # Set the paths to your dataset and output folders
-input_video_folder = 'input_video'         # Adjust the path if necessary
-output_folder = 'annotated_videos'         # Folder to save annotated videos
+input_video_folder = 'C:/Users/isaac/Videos/AI_VIDEO/test'         # Adjust the path if necessary
+output_folder = '185645_annotate'         # Folder to save annotated videos
 
 
 
