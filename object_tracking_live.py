@@ -17,6 +17,7 @@ from tkinter import ttk, filedialog, messagebox
 import customtkinter as ctk
 import api
 import matplotlib.pyplot as plt
+from bisect import bisect_left
 
 
 COMNAME_TO_TAXSERIAL = {
@@ -71,8 +72,8 @@ class Args:
     def __init__(self):
         self.confidence_threshold = 0.35
         self.track_thresh = 0.30
-        self.match_thresh = 0.60
-        self.track_buffer = 120
+        self.match_thresh = 0.50
+        self.track_buffer = 240
         self.mot20 = True
 
 def select_folder():
@@ -415,7 +416,7 @@ def process_video(total_video_path, yolo_model_path, view_videos, start_time=Non
                             continue
 
                         print(f"[OBS] Track {tid} finalized with {len(ended_obs['frames'])} frames")
-                        keyframes = reduce_to_keyframes(ended_obs)
+                        keyframes = reduce_to_keyframes_v3_dirpad(ended_obs)
                         print(f"[OBS] Reduced to {len(keyframes)} keyframes")
                         plot_keyframe_reduction(ended_obs["frames"], keyframes, title=f"Track {tid}")
 
@@ -599,6 +600,699 @@ def position_size_error(frame, start, end):
     size_err = max(abs(w - interp_w), abs(h - interp_h))  # biggest size deviation
 
     return max(pos_err, size_err)
+
+
+def reduce_to_keyframes_v3_dirpad(
+    endedObs,
+    pos_thresh=0.005,
+    size_thresh=0.01,
+    # --- directional padding controls ---
+    vel_window=2,          # use ±vel_window frames to estimate velocity (central difference)
+    speed_gain=0.35,       # scales padding from speed → fraction of box size
+    base_pad=0.02,         # optional always-on padding as a fraction of size (0–0.05 typical)
+    max_pad=0.15           # clamp total padding fraction (protect against spikes)
+):
+    """
+    Douglas–Peucker keyframe reducer with **direction-aware velocity padding**.
+
+    What it does:
+      1) Runs your original recursive simplification unchanged.
+      2) For each resulting keyframe, estimates local velocity (vx, vy) of the bbox center
+         using nearby raw frames (central difference).
+      3) Expands the bbox **only on the side of motion**:
+           - if vx > 0 (moving right): widen to the right
+           - if vx < 0 (moving left):  widen to the left
+           - if vy > 0 (moving down):  extend downward
+           - if vy < 0 (moving up):    extend upward
+         This prevents cutting off the object on the side it’s heading toward during
+         non-linear or turning motion without adding extra keyframes.
+
+    Parameters
+    ----------
+    endedObs : dict
+        {"frames": [ { "frame", "time", "bbox"=(x,y,w,h) }, ... ],
+         "class_name": str }
+        NOTE: x,y are assumed to be bbox **center** in normalized 0..1 coords.
+    pos_thresh, size_thresh : float
+        Original Douglas–Peucker thresholds (same meaning as your baseline).
+    vel_window : int
+        How many frames to look backward/forward when estimating velocity.
+        Effective difference uses indices i-vel_window and i+vel_window if available.
+    speed_gain : float
+        Converts |velocity| into padding fraction of current size. Increase if you still
+        see clipping on the motion side; decrease if boxes get too generous.
+    base_pad : float
+        Optional always-on padding fraction (applied even when speed≈0). Leave at 0.00
+        if you want purely velocity-driven padding.
+    max_pad : float
+        Upper clamp for the total per-axis padding fraction to avoid extreme growth.
+
+    Returns
+    -------
+    list[dict]
+        DB-ready keyframes with directional padding applied:
+        {subset, comname, type (start/middle/end), framenum, x, y, width, height}
+    """
+
+    frames = endedObs["frames"]
+    comname = endedObs["class_name"]
+
+    # --- trivial short sequence: return start/end with directional pad using rough velocity ---
+    if len(frames) <= 2:
+        out = []
+        for i, f in enumerate(frames):
+            x, y, w, h = f["bbox"]
+            vx, vy = 0.0, 0.0
+            if len(frames) == 2:
+                # estimate simple velocity from the other frame
+                other = frames[1 - i]["bbox"]
+                dt = abs(frames[1 - i]["time"] - f["time"]) + 1e-8
+                vx = (other[0] - x) / dt
+                vy = (other[1] - y) / dt
+            x, y, w, h = _apply_directional_pad(x, y, w, h, vx, vy, base_pad, speed_gain, max_pad)
+            out.append({
+                "subset": "1",
+                "comname": comname,
+                "type": "start" if i == 0 else "end",
+                "framenum": f["frame"],
+                "x": x, "y": y, "width": w, "height": h
+            })
+        return out
+
+    # --- original recursive DP (unchanged logic) ---------------------------------------------
+    def position_size_error(frame, start, end):
+        t = (frame["time"] - start["time"]) / (end["time"] - start["time"] + 1e-8)
+        ix = start["bbox"][0] + t * (end["bbox"][0] - start["bbox"][0])
+        iy = start["bbox"][1] + t * (end["bbox"][1] - start["bbox"][1])
+        iw = start["bbox"][2] + t * (end["bbox"][2] - start["bbox"][2])
+        ih = start["bbox"][3] + t * (end["bbox"][3] - start["bbox"][3])
+        x, y, w, h = frame["bbox"]
+        pos_err  = math.hypot(x - ix, y - iy)
+        size_err = max(abs(w - iw), abs(h - ih))
+        return max(pos_err, size_err)
+
+    def recursive_reduce(seq):
+        if len(seq) <= 2:
+            return [seq[0], seq[-1]]
+        start, end = seq[0], seq[-1]
+        max_err, idx = 0.0, 0
+        for i in range(1, len(seq) - 1):
+            err = position_size_error(seq[i], start, end)
+            if err > max_err:
+                max_err, idx = err, i
+        if max_err > pos_thresh:
+            left  = recursive_reduce(seq[: idx + 1])
+            right = recursive_reduce(seq[idx:])
+            return left[:-1] + right
+        else:
+            return [start, end]
+
+    reduced = recursive_reduce(frames)
+
+    # --- map frame -> index to pull local raw-neighborhood quickly ---------------------------
+    # frames are typically ascending by frame number; we build index for O(1) lookup
+    frame_nums = [f["frame"] for f in frames]
+    def _find_raw_index(frame_num):
+        # binary search closest index with exact match fall-through
+        j = bisect_left(frame_nums, frame_num)
+        if j < len(frame_nums) and frame_nums[j] == frame_num:
+            return j
+        # fallback: nearest neighbor
+        if j == 0: return 0
+        if j == len(frame_nums): return len(frame_nums) - 1
+        return j if abs(frame_nums[j] - frame_num) < abs(frame_nums[j-1] - frame_num) else j - 1
+
+    # --- package as DB rows with **direction-aware padding** ---------------------------------
+    out = []
+    for i, kf in enumerate(reduced):
+        x, y, w, h = kf["bbox"]
+
+        # estimate local velocity from raw frames around this keyframe (central difference)
+        center_idx = _find_raw_index(kf["frame"])
+        i0 = max(0, center_idx - vel_window)
+        i1 = min(len(frames) - 1, center_idx + vel_window)
+        if i1 == i0:
+            vx, vy = 0.0, 0.0
+        else:
+            x0, y0, t0 = frames[i0]["bbox"][0], frames[i0]["bbox"][1], frames[i0]["time"]
+            x1, y1, t1 = frames[i1]["bbox"][0], frames[i1]["bbox"][1], frames[i1]["time"]
+            dt = (t1 - t0) if (t1 - t0) != 0 else 1e-8
+            vx, vy = (x1 - x0) / dt, (y1 - y0) / dt
+
+        # apply directional padding: expand & shift toward motion side on each axis
+        x, y, w, h = _apply_directional_pad(x, y, w, h, vx, vy, base_pad, speed_gain, max_pad)
+
+        out.append({
+            "subset": "1",
+            "comname": comname,
+            "type": ("start" if i == 0 else ("end" if i == len(reduced) - 1 else "middle")),
+            "framenum": kf["frame"],
+            "x": x, "y": y, "width": w, "height": h
+        })
+
+    return out
+
+
+# -------- helper: directional padding applied to a (centered) bbox ---------------------------
+def _apply_directional_pad(x, y, w, h, vx, vy, base_pad, speed_gain, max_pad):
+    """
+    Expand axis-aligned bbox on the **side of motion** for each axis independently.
+    x,y are bbox centers in normalized image coordinates; w,h are normalized sizes.
+
+    Padding on X:
+        pad_x = clamp(base_pad + speed_gain * |vx|, 0, max_pad)
+        if vx > 0 (moving right):  increase width by pad_x*w and shift center +pad_x*w/2
+        if vx < 0 (moving left):   increase width by pad_x*w and shift center -pad_x*w/2
+
+    Padding on Y:
+        pad_y = clamp(base_pad + speed_gain * |vy|, 0, max_pad)
+        if vy > 0 (moving down):   increase height by pad_y*h and shift center +pad_y*h/2
+        if vy < 0 (moving up):     increase height by pad_y*h and shift center -pad_y*h/2
+    """
+    # compute per-axis padding fractions (clamped)
+    pad_x = max(0.0, min(max_pad, base_pad + speed_gain * abs(vx)))
+    pad_y = max(0.0, min(max_pad, base_pad + speed_gain * abs(vy)))
+
+    # expand and shift on X toward motion side
+    if pad_x > 0.0:
+        dx = 0.5 * pad_x * w
+        w  = w * (1.0 + pad_x)
+        x += dx if vx > 0 else (-dx if vx < 0 else 0.0)
+
+    # expand and shift on Y toward motion side
+    if pad_y > 0.0:
+        dy = 0.5 * pad_y * h
+        h  = h * (1.0 + pad_y)
+        y += dy if vy > 0 else (-dy if vy < 0 else 0.0)
+
+    return x, y, w, h
+
+
+def reduce_to_keyframes_v3_dirpad(endedObs,
+                                  pos_thresh=0.005,
+                                  size_thresh=0.01,
+                                  vel_window=3,
+                                  speed_gain=0.25,
+                                  base_pad=0.00,
+                                  max_pad=0.12):
+    """
+    Douglas–Peucker keyframe reducer with direction-aware velocity padding.
+
+    This keeps your original simplification algorithm intact and simply
+    adds a post-process that expands each keyframe’s bounding box toward
+    the direction of motion (down, up, left, right).
+
+    Parameters
+    ----------
+    endedObs : dict
+        Observation with "frames" (each frame has frame, time, bbox=(x,y,w,h))
+        and "class_name".
+    pos_thresh, size_thresh : float
+        Original Douglas–Peucker thresholds.
+    vel_window : int
+        Number of frames before/after the keyframe used to estimate velocity.
+    speed_gain : float
+        Converts absolute velocity into padding fraction of bbox size.
+    base_pad : float
+        Constant baseline padding fraction (0–0.05 typical).
+    max_pad : float
+        Clamp for total padding fraction to avoid excessive box growth.
+    """
+
+    frames = endedObs["frames"]
+    comname = endedObs["class_name"]
+
+    # ----------------------------------------------------------------------
+    # Recursive simplifier (identical structure, just renamed error fn)
+    # ----------------------------------------------------------------------
+    def position_size_error_dir(frame, start, end):
+        """Same math as original, distinct name for clarity."""
+        t = (frame["time"] - start["time"]) / (end["time"] - start["time"] + 1e-8)
+        ix = start["bbox"][0] + t * (end["bbox"][0] - start["bbox"][0])
+        iy = start["bbox"][1] + t * (end["bbox"][1] - start["bbox"][1])
+        iw = start["bbox"][2] + t * (end["bbox"][2] - start["bbox"][2])
+        ih = start["bbox"][3] + t * (end["bbox"][3] - start["bbox"][3])
+        x, y, w, h = frame["bbox"]
+        pos_err = math.hypot(x - ix, y - iy)
+        size_err = max(abs(w - iw), abs(h - ih))
+        return max(pos_err, size_err)
+
+    def recursive_reduce(seq):
+        if len(seq) <= 2:
+            return [seq[0], seq[-1]]
+        start, end = seq[0], seq[-1]
+        max_err, idx = 0.0, 0
+        for i in range(1, len(seq) - 1):
+            err = position_size_error_dir(seq[i], start, end)
+            if err > max_err:
+                max_err, idx = err, i
+        if max_err > pos_thresh:
+            left = recursive_reduce(seq[: idx + 1])
+            right = recursive_reduce(seq[idx:])
+            return left[:-1] + right
+        else:
+            return [start, end]
+
+    reduced = recursive_reduce(frames)
+
+    # Map frame numbers for quick raw-frame lookup
+    frame_nums = [f["frame"] for f in frames]
+    def find_raw_index(frame_num):
+        j = bisect_left(frame_nums, frame_num)
+        if j < len(frame_nums) and frame_nums[j] == frame_num:
+            return j
+        if j == 0: return 0
+        if j == len(frame_nums): return len(frame_nums) - 1
+        return j if abs(frame_nums[j] - frame_num) < abs(frame_nums[j-1] - frame_nums[j-1]) else j - 1
+
+    # ----------------------------------------------------------------------
+    # Build output list with direction-aware velocity padding
+    # ----------------------------------------------------------------------
+    out = []
+    for i, kf in enumerate(reduced):
+        x, y, w, h = kf["bbox"]
+
+        # Estimate local velocity (vx, vy) from raw frames near this keyframe
+        center_idx = find_raw_index(kf["frame"])
+        i0 = max(0, center_idx - vel_window)
+        i1 = min(len(frames) - 1, center_idx + vel_window)
+        if i1 == i0:
+            vx = vy = 0.0
+        else:
+            x0, y0, t0 = frames[i0]["bbox"][0], frames[i0]["bbox"][1], frames[i0]["time"]
+            x1, y1, t1 = frames[i1]["bbox"][0], frames[i1]["bbox"][1], frames[i1]["time"]
+            dt = (t1 - t0) if (t1 - t0) != 0 else 1e-8
+            vx, vy = (x1 - x0) / dt, (y1 - y0) / dt
+
+        # Apply directional padding based on motion
+        x, y, w, h = _apply_directional_pad(x, y, w, h, vx, vy,
+                                            base_pad=base_pad,
+                                            speed_gain=speed_gain,
+                                            max_pad=max_pad)
+
+        out.append({
+            "subset": "1",
+            "comname": comname,
+            "type": "start" if i == 0 else ("end" if i == len(reduced) - 1 else "middle"),
+            "framenum": kf["frame"],
+            "x": x, "y": y, "width": w, "height": h
+        })
+
+    return out
+
+
+# --------------------------------------------------------------------------
+# Helper: expand bbox toward direction of motion (center-based coords)
+# --------------------------------------------------------------------------
+def _apply_directional_pad(x, y, w, h, vx, vy, base_pad, speed_gain, max_pad):
+    """
+    Expand an (x,y,w,h) box on the side of motion using normalized units.
+    """
+    pad_x = min(max_pad, base_pad + speed_gain * abs(vx))
+    pad_y = min(max_pad, base_pad + speed_gain * abs(vy))
+
+    # Shift and scale width based on X velocity
+    if pad_x > 0:
+        dx = 0.5 * pad_x * w
+        w *= (1 + pad_x)
+        x += dx if vx > 0 else (-dx if vx < 0 else 0)
+
+    # Shift and scale height based on Y velocity
+    if pad_y > 0:
+        dy = 0.5 * pad_y * h
+        h *= (1 + pad_y)
+        y += dy if vy > 0 else (-dy if vy < 0 else 0)
+
+    return x, y, w, h
+
+
+def reduce_to_keyframes_v2(endedObs, pos_thresh=0.005, size_thresh=0.01, pad_frac=0.05):
+    """
+    Stable Douglas–Peucker keyframe reducer with downward padding.
+
+    This version fixes the common visual issue where generated keyframes
+    slightly cut off the bottom of the object due to perspective and
+    underestimation of downward motion.
+
+    Instead of altering the simplification math, it simply expands each
+    keyframe's bounding box downward by a small fraction of its own height.
+    This approach is stable, requires no motion estimation, and avoids
+    overfitting to noise.
+
+    Parameters
+    ----------
+    endedObs : dict
+        Contains:
+          • "frames": list of dicts with keys:
+                "frame", "time", "bbox" = (x, y, w, h)
+          • "class_name": common name for the object.
+    pos_thresh : float
+        Maximum allowed deviation in x/y between interpolated and actual points.
+    size_thresh : float
+        Maximum allowed deviation in w/h between interpolated and actual points.
+    pad_frac : float
+        Fraction of each keyframe’s height used to extend the box downward.
+        Typical range: 0.03–0.08 (3–8%).
+    """
+
+    frames = endedObs["frames"]
+    comname = endedObs["class_name"]
+
+    # ----------------------------------------------------------------------
+    # Edge case: only start and end frames → mark both as keyframes
+    # ----------------------------------------------------------------------
+    if len(frames) <= 2:
+        out = []
+        for i, f in enumerate(frames):
+            x, y, w, h = f["bbox"]
+
+            # Downward padding applied even for short tracks
+            y += pad_frac * h
+            h *= (1 + pad_frac)
+
+            out.append({
+                "subset": "1",
+                "comname": comname,
+                "type": "start" if i == 0 else "end",
+                "framenum": f["frame"],
+                "x": x,
+                "y": y,
+                "width": w,
+                "height": h
+            })
+        return out
+
+    # ----------------------------------------------------------------------
+    # Recursive Douglas–Peucker simplification
+    # ----------------------------------------------------------------------
+    def recursive_reduce(seq):
+        """Recursively split sequence if deviation exceeds threshold."""
+        if len(seq) <= 2:
+            return [seq[0], seq[-1]]
+
+        start, end = seq[0], seq[-1]
+        max_err = 0.0
+        index = 0
+
+        for i in range(1, len(seq) - 1):
+            err = position_size_error(seq[i], start, end)
+            if err > max_err:
+                max_err = err
+                index = i
+
+        if max_err > pos_thresh:
+            left = recursive_reduce(seq[: index + 1])
+            right = recursive_reduce(seq[index:])
+            return left[:-1] + right
+        else:
+            return [start, end]
+
+    reduced = recursive_reduce(frames)
+
+    # ----------------------------------------------------------------------
+    # Wrap into DB-ready keyframe dicts and apply downward padding
+    # ----------------------------------------------------------------------
+    out = []
+    for i, f in enumerate(reduced):
+        x, y, w, h = f["bbox"]
+
+        # Apply small downward padding (extends box downward slightly)
+        y += pad_frac * h
+        h *= (1 + pad_frac)
+
+        out.append({
+            "subset": "1",
+            "comname": comname,
+            "type": (
+                "start" if i == 0 else
+                ("end" if i == len(reduced) - 1 else "middle")
+            ),
+            "framenum": f["frame"],
+            "x": x,
+            "y": y,
+            "width": w,
+            "height": h
+        })
+
+    return out
+
+
+
+def reduce_to_keyframes_v5(endedObs, frame_width=1920, frame_height=1080,
+                           pos_thresh_px=15, size_thresh_px=30, min_gap=3):
+    """
+    Curvature-aware Douglas–Peucker keyframe reducer (pixel-space version).
+
+    Uses quadratic regression to model smooth acceleration in object motion
+    (especially downward + enlarging movement caused by ROV approach).  This
+    prevents premature tail cut-offs where linear interpolation would
+    underestimate motion.
+
+    Parameters
+    ----------
+    endedObs : dict
+        Observation with "frames" (each has bbox=(x,y,w,h) in normalized [0–1])
+        and "class_name".
+    frame_width, frame_height : int
+        Pixel dimensions used to convert normalized coordinates to pixels.
+    pos_thresh_px, size_thresh_px : float
+        Maximum allowed deviation in pixels before a new keyframe is required.
+    min_gap : int
+        Minimum number of frames between recursive splits.
+
+    Returns
+    -------
+    list of dict
+        Simplified keyframes ready for DB insertion.
+    """
+
+    frames = endedObs["frames"]
+    comname = endedObs["class_name"]
+
+    if len(frames) <= 2:
+        return [
+            {
+                "subset": "1",
+                "comname": comname,
+                "type": "start" if i == 0 else "end",
+                "framenum": f["frame"],
+                "x": f["bbox"][0],
+                "y": f["bbox"][1],
+                "width": f["bbox"][2],
+                "height": f["bbox"][3],
+            }
+            for i, f in enumerate(frames)
+        ]
+
+    # ----------------------------------------------------------------------
+    # Helper: quadratic error in pixel space
+    # ----------------------------------------------------------------------
+    def position_size_error_quad(frame_seq, start_idx, end_idx, test_idx):
+        """
+        Fit a quadratic curve through (frame vs bbox_coord) for x,y,w,h between
+        start_idx and end_idx, then compute pixel error of frame_seq[test_idx]
+        from that curve.
+        """
+        idxs = [f["frame"] for f in frame_seq[start_idx:end_idx + 1]]
+        xs = np.array([f["bbox"][0] * frame_width for f in frame_seq[start_idx:end_idx + 1]])
+        ys = np.array([f["bbox"][1] * frame_height for f in frame_seq[start_idx:end_idx + 1]])
+        ws = np.array([f["bbox"][2] * frame_width for f in frame_seq[start_idx:end_idx + 1]])
+        hs = np.array([f["bbox"][3] * frame_height for f in frame_seq[start_idx:end_idx + 1]])
+
+        # Fit quadratic polynomials (2nd order)
+        def fit_quad(t, v): return np.poly1d(np.polyfit(t, v, 2))
+        fpx, fpy, fpw, fph = fit_quad(idxs, xs), fit_quad(idxs, ys), fit_quad(idxs, ws), fit_quad(idxs, hs)
+
+        test_frame = frame_seq[test_idx]
+        t = test_frame["frame"]
+        x_est, y_est = fpx(t), fpy(t)
+        w_est, h_est = fpw(t), fph(t)
+
+        x_act, y_act = test_frame["bbox"][0] * frame_width, test_frame["bbox"][1] * frame_height
+        w_act, h_act = test_frame["bbox"][2] * frame_width, test_frame["bbox"][3] * frame_height
+
+        pos_err = math.hypot(x_act - x_est, y_act - y_est)
+        size_err = math.hypot(w_act - w_est, h_act - h_est)
+
+        return max(pos_err / pos_thresh_px, size_err / size_thresh_px)
+
+    # ----------------------------------------------------------------------
+    # Recursive simplification
+    # ----------------------------------------------------------------------
+    def recursive_reduce_quad(seq, start_idx=0, end_idx=None):
+        if end_idx is None:
+            end_idx = len(seq) - 1
+        if end_idx - start_idx <= 2:
+            return [seq[start_idx], seq[end_idx]]
+
+        max_err, worst_idx = 0.0, start_idx
+        for i in range(start_idx + 1, end_idx):
+            err = position_size_error_quad(seq, start_idx, end_idx, i)
+            if err > max_err:
+                max_err, worst_idx = err, i
+
+        if max_err > 1.0 and (worst_idx - start_idx) > min_gap and (end_idx - worst_idx) > min_gap:
+            left = recursive_reduce_quad(seq, start_idx, worst_idx)
+            right = recursive_reduce_quad(seq, worst_idx, end_idx)
+            return left[:-1] + right
+        else:
+            return [seq[start_idx], seq[end_idx]]
+
+    reduced = recursive_reduce_quad(frames)
+
+    # Deduplicate consecutive identical frames
+    deduped = []
+    for f in reduced:
+        if not deduped or f["frame"] != deduped[-1]["frame"]:
+            deduped.append(f)
+
+    # ----------------------------------------------------------------------
+    # Output formatting
+    # ----------------------------------------------------------------------
+    out = []
+    for i, f in enumerate(deduped):
+        out.append({
+            "subset": "1",
+            "comname": comname,
+            "type": (
+                "start" if i == 0 else
+                ("end" if i == len(deduped) - 1 else "middle")
+            ),
+            "framenum": f["frame"],
+            "x": f["bbox"][0],
+            "y": f["bbox"][1],
+            "width": f["bbox"][2],
+            "height": f["bbox"][3],
+        })
+
+    return out
+
+
+
+def reduce_to_keyframes_v4(endedObs, frame_width=1920, frame_height=1080,
+                           pos_thresh_px=15, size_thresh_px=30, min_gap=3):
+    """
+    Improved Douglas–Peucker keyframe reducer that works in pixel space.
+    This avoids distortion from normalized coordinates and prevents the
+    apparent "cut-off bottom" problem seen when objects accelerate
+    downward in perspective.
+
+    Parameters
+    ----------
+    endedObs : dict
+        Observation with "frames" (each with bbox=(x,y,w,h) in normalized
+        [0–1] coordinates) and "class_name".
+    frame_width : int
+        Pixel width of video frame (used to de-normalize coords).
+    frame_height : int
+        Pixel height of video frame (used to de-normalize coords).
+    pos_thresh_px : float
+        Max allowed deviation in pixels for (x,y) before adding keyframe.
+    size_thresh_px : float
+        Max allowed deviation in pixels for (w,h) before adding keyframe.
+    min_gap : int
+        Minimum frame distance between recursive splits.
+
+    Returns
+    -------
+    list of dict
+        Simplified keyframes formatted for DB.
+    """
+
+    frames = endedObs["frames"]
+    comname = endedObs["class_name"]
+
+    if len(frames) <= 2:
+        # trivial case: just start & end
+        return [
+            {
+                "subset": "1",
+                "comname": comname,
+                "type": "start" if i == 0 else "end",
+                "framenum": f["frame"],
+                "x": f["bbox"][0],
+                "y": f["bbox"][1],
+                "width": f["bbox"][2],
+                "height": f["bbox"][3],
+            }
+            for i, f in enumerate(frames)
+        ]
+
+    # --- helper: compute error in pixel space ---
+    def position_size_error_px(frame, start, end):
+        # convert normalized to pixel space
+        f_box = [frame["bbox"][0] * frame_width,
+                 frame["bbox"][1] * frame_height,
+                 frame["bbox"][2] * frame_width,
+                 frame["bbox"][3] * frame_height]
+        s_box = [start["bbox"][0] * frame_width,
+                 start["bbox"][1] * frame_height,
+                 start["bbox"][2] * frame_width,
+                 start["bbox"][3] * frame_height]
+        e_box = [end["bbox"][0] * frame_width,
+                 end["bbox"][1] * frame_height,
+                 end["bbox"][2] * frame_width,
+                 end["bbox"][3] * frame_height]
+
+        t = (frame["frame"] - start["frame"]) / (end["frame"] - start["frame"])
+        interp = [s_box[j] + t * (e_box[j] - s_box[j]) for j in range(4)]
+
+        dx = f_box[0] - interp[0]
+        dy = f_box[1] - interp[1]
+        dw = f_box[2] - interp[2]
+        dh = f_box[3] - interp[3]
+
+        pos_err = math.hypot(dx, dy)
+        size_err = math.hypot(dw, dh)
+
+        return max(pos_err / pos_thresh_px, size_err / size_thresh_px)
+
+    # --- recursive simplification in pixel space ---
+    def recursive_reduce_px(seq):
+        if len(seq) <= 2:
+            return [seq[0], seq[-1]]
+
+        start, end = seq[0], seq[-1]
+        max_err, index = 0.0, 0
+
+        for i in range(1, len(seq) - 1):
+            err = position_size_error_px(seq[i], start, end)
+            if err > max_err:
+                max_err, index = err, i
+
+        if max_err > 1.0 and index > min_gap and len(seq) - index > min_gap:
+            left = recursive_reduce_px(seq[: index + 1])
+            right = recursive_reduce_px(seq[index:])
+            return left[:-1] + right
+        else:
+            return [start, end]
+
+    reduced = recursive_reduce_px(frames)
+
+    # deduplicate consecutive identical frames
+    deduped = []
+    for f in reduced:
+        if not deduped or f["frame"] != deduped[-1]["frame"]:
+            deduped.append(f)
+
+    # --- format back to normalized DB keyframes ---
+    out = []
+    for i, f in enumerate(deduped):
+        out.append({
+            "subset": "1",
+            "comname": comname,
+            "type": (
+                "start" if i == 0 else
+                ("end" if i == len(deduped) - 1 else "middle")
+            ),
+            "framenum": f["frame"],
+            "x": f["bbox"][0],
+            "y": f["bbox"][1],
+            "width": f["bbox"][2],
+            "height": f["bbox"][3],
+        })
+
+    return out
 
 
 def plot_keyframe_reduction(frames, keyframes, title="Keyframe Reduction Debug"):

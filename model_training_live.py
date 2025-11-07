@@ -17,6 +17,13 @@ from pathlib import Path
 import time
 import numpy as np
 
+# Try importing the plotting utilities from the correct place
+try:
+    from ultralytics.utils.plotting import Annotator as _  # quick test import
+    import ultralytics.utils.plotting as plots
+except ImportError:
+    plots = None  # plotting module not available in this version
+
 import torch
 try:
     from torch.profiler import profile, record_function, ProfilerActivity, schedule
@@ -189,6 +196,10 @@ def open_dataset_builder(parent):
         # Step 4: Rebuild `annotations_by_video` dictionary from observations
         annotations_by_video = {}
         for obs in observations:
+
+            ## only use observations with a note of R
+            if obs["note"] != 'R': 
+                continue
 
             # Extract frame numbers from the observation's keyframes
             frame_numbers = [kf["framenum"] for kf in obs["keyframes"] if "framenum" in kf]
@@ -461,6 +472,35 @@ def startMlTraining(dataset_info, config):
 
     model = YOLO(pretrained_weights)
 
+    # --- place this immediately after: model = YOLO(pretrained_weights) ---
+    try:
+        if plots and hasattr(plots, 'clean_label'):
+            original_clean_label = plots.clean_label
+
+            def clean_label_preserve_period(label: str):
+                # Keep periods intact in class labels when YOLO generates plots
+                sanitized = original_clean_label(label)
+                if isinstance(label, str) and "." in label:
+                    sanitized = sanitized.replace(" ", ".").replace("_", ".")
+                    while ".." in sanitized:
+                        sanitized = sanitized.replace("..", ".")
+                    if "." not in sanitized:
+                        sanitized = label
+                return sanitized
+
+            plots.clean_label = clean_label_preserve_period  # apply patch
+
+        elif hasattr(model, 'names'):  # fallback if plotting helper missing
+            if isinstance(model.names, dict):
+                model.names = {i: (n.replace(".", "․") if isinstance(n, str) else n)
+                            for i, n in model.names.items()}
+            elif isinstance(model.names, list):
+                model.names = [(n.replace(".", "․") if isinstance(n, str) else n)
+                            for n in model.names]
+
+    except Exception:
+        pass
+
     device = "0" if torch.cuda.is_available() else "cpu"
 
 
@@ -556,9 +596,9 @@ def startMlTraining(dataset_info, config):
         training_run = functions.createDatabaseTrainingRun(training_run_record)
         training_run_id = training_run.get("id", None)
 
-        print(f"[DB] Created training_run id={training_run_id}")
+        #print(f"[DB] Created training_run id={training_run_id}")
 
-        print(f"[DB] Created ml_model entry: id={model_id}")
+        #print(f"[DB] Created ml_model entry: id={model_id}")
 
         # Keep track of epoch timing in a dict (in memory)
         epoch_start_times = {}
@@ -582,7 +622,7 @@ def startMlTraining(dataset_info, config):
             if os.path.exists(best_weights):
                 try:
                     shutil.copy2(best_weights, user_named_weights)
-                    print(f"[EPOCH {trainer.epoch}] Updated {user_named_weights}")
+                    #print(f"[EPOCH {trainer.epoch}] Updated {user_named_weights}")
                 except Exception as e:
                     print(f"[WARNING] Failed to update model weights for epoch {trainer.epoch}: {e}")
 
@@ -609,7 +649,22 @@ def startMlTraining(dataset_info, config):
             }
 
             functions.createDatabaseEpoch(epoch_record)
-            print(f"[EPOCH {epoch_num}] Duration: {duration:.2f}s saved to database.")
+
+            # After saving metrics and weights
+            if epoch_num % 5 == 0:  # only every 5 epochs
+               # --- NEW live plot generation ---
+                try:
+                    # Option 1: modern YOLO API
+                    if hasattr(trainer, "plot_results"):
+                        trainer.plot_results()
+                    # Option 2: fallback for older versions
+                    else:
+                        from ultralytics.utils.plotting import plot_results
+                        results_csv = os.path.join(trainer.save_dir, 'results.csv')
+                        if os.path.exists(results_csv):
+                            plot_results(file=results_csv, dir=trainer.save_dir)
+                except Exception as e:
+                    print(f"[WARNING] Failed to generate epoch plots: {e}")
 
 
         model.add_callback("on_train_epoch_end", on_epoch_end)
@@ -632,6 +687,7 @@ def startMlTraining(dataset_info, config):
                     project=output_folder,
                     name=new_model_name,
                     device=device,
+                    exist_ok=True,  # stops yolo from creating folder2 everytime
                     batch=batch_size
                 )
         else:
@@ -775,6 +831,29 @@ def startMlTraining(dataset_info, config):
         print(f"[DB] Updated ml_model {model_id}: "
             f"storage_path='{weights_folder}', name='{config['new_model_name']}.pt', status='trained'")
         
+
+        # ------------------------------------------------------------
+        # Final weight renaming (keep last.pt, rename best.pt → modelname.pt)
+        # ------------------------------------------------------------
+        weights_folder = os.path.join(output_folder, new_model_name, "weights")
+        best_path = os.path.join(weights_folder, "best.pt")
+        named_path = os.path.join(weights_folder, f"{config['new_model_name']}.pt")
+
+        try:
+            # Remove any stale copy from previous epochs
+            if os.path.exists(named_path):
+                os.remove(named_path)
+
+            # Copy the final stripped best.pt to modelname.pt
+            if os.path.exists(best_path):
+                shutil.copy2(best_path, named_path)
+                print(f"[INFO] Final model saved as {named_path}")
+            else:
+                print("[WARNING] best.pt not found at end of training.")
+
+        except Exception as e:
+            print(f"[WARNING] Failed to finalize model weights: {e}")
+
 
         update_data = {
             "status": "trained",

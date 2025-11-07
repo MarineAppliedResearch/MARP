@@ -100,7 +100,7 @@ for obs in observations:
 
 # Set paths for input videos and output dataset folders
 input_video_folder = "C:/Users/isaac/Videos/AI_VIDEO"
-output_dataset_folder = "yolo_dataset_campa2025_test6"
+output_dataset_folder = "yolo_dataset_genericstar"
 classnames_file = os.path.join(output_dataset_folder, "classnames.yaml")
 
 # Subfolders for training and evaluation data
@@ -119,8 +119,9 @@ os.makedirs(human_review_folder, exist_ok=True)
 
 # Extract unique class names
 unique_classnames = set()
-for obs in observations:
-    unique_classnames.add(obs["comname"])
+###for obs in observations:
+###    unique_classnames.add(obs["comname"])
+unique_classnames.add("Generic Star")
 
 classnames_list = sorted(unique_classnames)
 classnames_to_ids = {classname: idx for idx, classname in enumerate(classnames_list)}
@@ -168,7 +169,8 @@ for video_name, observations in annotations_by_video.items():
                 y_center=keyframe["y"],
                 width_norm=keyframe["width"],
                 height_norm=keyframe["height"],
-                class_name=obs["comname"],
+                #class_name=obs["comname"],
+                class_name="Generic Star",
                 type=keyframe["type"],
                 observation_id=keyframe["observation_id"],
                 subset=keyframe["subset"],

@@ -13,7 +13,7 @@ import requests
 
 
 # Base URL of your server (adjust as needed)
-BASE_URL = "http://192.168.1.53:3081"
+BASE_URL = "http://192.168.1.203:3081"
 
 
 def get_user(name: str) -> dict:

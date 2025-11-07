@@ -5,7 +5,7 @@ import requests
 import urllib.parse
 import datetime
 
-api_base_url = 'http://192.168.1.49:3081/api'  # API endpoint base URL
+api_base_url = 'http://192.168.1.203:3081/api'  # API endpoint base URL
 data_yaml_path = 'data.yaml'               # Path to the data.yaml file containing class names
 
 # Initialize the range finder
@@ -162,6 +162,8 @@ def createDatabaseDatasetObservation(dataset_observation_data):
 
     Returns:
         dict: {"inserted": <count>} on success, or None on failure.
+
+        THIS SOMETIMES GIVES THE ERROR 413 CLIENT erROR, PAYLOAD TO LARGE FOR URL
 """
 def createDatabaseDatasetObservationsBulk(dataset_observations):
     
