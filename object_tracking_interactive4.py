@@ -38,10 +38,10 @@ def calculate_iou(box1, box2):
 
 class Args:
     def __init__(self):
-        self.confidence_threshold = 0.35
-        self.track_thresh = 0.30
-        self.match_thresh = 0.60
-        self.track_buffer = 120
+        self.confidence_threshold = 0.05
+        self.track_thresh = 0.05
+        self.match_thresh = 0.80
+        self.track_buffer = 240
         self.mot20 = True
 
 def select_folder():
@@ -224,7 +224,7 @@ def main():
     print(f"Found {len(video_files)} video(s) in the folder. Starting processing in batches of 2...")
 
     screen_width, screen_height = 1920, 1080  # adjust or detect
-    batch_size = 4
+    batch_size = 5
     cols = math.ceil(math.sqrt(batch_size))
     rows = math.ceil(batch_size / cols)
     tile_size = (screen_width // cols, screen_height // rows)

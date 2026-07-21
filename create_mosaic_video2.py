@@ -116,5 +116,5 @@ if __name__ == "__main__":
     if not base_folder:
         print("No folder selected. Exiting.")
         exit()
-    output_file = "mosaic_video8.avi"
+    output_file = "mosaic_video9.avi"
     create_mosaic_video(base_folder, output_file)

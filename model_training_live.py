@@ -166,6 +166,9 @@ def open_dataset_builder(parent):
         eval_labels_folder = os.path.join(output_dataset_folder, "eval", "labels")
         human_review_folder = os.path.join(output_dataset_folder, "for_human_review")
 
+        os.makedirs(os.path.join(output_dataset_folder, "crops", "train", "images"), exist_ok=True)
+        os.makedirs(os.path.join(output_dataset_folder, "crops", "eval", "images"), exist_ok=True)
+
         # Create necessary folders
         os.makedirs(train_images_folder, exist_ok=True)
         os.makedirs(train_labels_folder, exist_ok=True)
@@ -239,7 +242,65 @@ def open_dataset_builder(parent):
         classnames_list = sorted(selected_comnames)
         classnames_to_ids = {classname: idx for idx, classname in enumerate(classnames_list)}
 
-        classnames_data = {
+        # ---------------------------------------------------------
+        # Write phase-specific YOLO dataset YAMLs (inline)
+        # ---------------------------------------------------------
+        dataset_root = output_dataset_folder
+
+        # =====================
+        # FRAMES PHASE
+        # =====================
+        frames_yaml_path = os.path.join(dataset_root, "frames-classnames.yaml")
+        frames_yaml_data = {
+            "names": classnames_list,
+            "nc": len(classnames_list),
+            "train": os.path.abspath(os.path.join(dataset_root, "train", "images")),
+            "val": os.path.abspath(os.path.join(dataset_root, "eval", "images")),
+        }
+
+        with open(frames_yaml_path, "w") as f:
+            yaml.dump(frames_yaml_data, f)
+
+        # =====================
+        # CROPS PHASE
+        # =====================
+        crops_yaml_path = os.path.join(dataset_root, "crops-classnames.yaml")
+        crops_yaml_data = {
+            "names": classnames_list,
+            "nc": len(classnames_list),
+            "train": os.path.abspath(os.path.join(dataset_root, "crops", "train", "images")),
+            "val": os.path.abspath(os.path.join(dataset_root, "crops", "eval", "images")),
+        }
+
+        with open(crops_yaml_path, "w") as f:
+            yaml.dump(crops_yaml_data, f)
+
+        # =====================
+        # MIXED PHASE (frames + crops)
+        # =====================
+        mixed_yaml_path = os.path.join(dataset_root, "mixed-classnames.yaml")
+        mixed_yaml_data = {
+            "names": classnames_list,
+            "nc": len(classnames_list),
+            "train": [
+                os.path.abspath(os.path.join(dataset_root, "train", "images")),
+                os.path.abspath(os.path.join(dataset_root, "crops", "train", "images")),
+            ],
+            "val": [
+                os.path.abspath(os.path.join(dataset_root, "eval", "images")),
+                os.path.abspath(os.path.join(dataset_root, "crops", "eval", "images")),
+            ],
+        }
+
+        with open(mixed_yaml_path, "w") as f:
+            yaml.dump(mixed_yaml_data, f)
+
+        print("[INFO] Wrote YOLO dataset YAMLs:")
+        print("  - frames-classnames.yaml")
+        print("  - crops-classnames.yaml")
+        print("  - mixed-classnames.yaml")
+
+        """ classnames_data = {
             "names": classnames_list,
             "nc": len(classnames_list),
             "train": os.path.abspath(train_images_folder),
@@ -249,9 +310,9 @@ def open_dataset_builder(parent):
         with open(classnames_file, "w") as yaml_file:
             yaml.dump(classnames_data, yaml_file)
 
-        print(f"Class names and dataset paths saved to {classnames_file}")
+        print(f"Class names and dataset paths saved to {classnames_file}") """
 
-        observation_ids = list({obs["observation_id"] for obs in observations})
+        """ observation_ids = list({obs["observation_id"] for obs in observations})
         random.shuffle(observation_ids)
         split_idx = int(len(observation_ids) * 0.8)
         train_ids = set(observation_ids[:split_idx])
@@ -263,7 +324,7 @@ def open_dataset_builder(parent):
             dataset_observations_payload.append({
                 "dataset_id": datasetId,
                 "observation_id": obs["observation_id"],
-                "inclusion_type": "train" if obs["observation_id"] in train_ids else "val",
+                "inclusion_type": "train" if obs["observation_id"] in train_ids else "eval",
                 "selection_method": "automatic",
                 "weight": 1,
                 "notes" : "initial tests"
@@ -274,7 +335,175 @@ def open_dataset_builder(parent):
         if result:
             print(f"Successfully inserted {result.get('inserted')} dataset_observations.")
         else:
-            print("Bulk insert failed.")
+            print("Bulk insert failed.") """
+
+        # ---------------------------------------------------------
+        # Temporal segmented frame-level split per video
+        # ---------------------------------------------------------
+        # GOAL:
+        #   We want to split annotated frames from each video into
+        #   interleaved temporal segments, alternating between training
+        #   and evaluation regions, rather than cutting the whole video
+        #   at one 80/20 point or splitting randomly by frame.
+        #
+        # WHY:
+        #   - Keeps nearby frames grouped (reduces data leakage).
+        #   - Every video contributes to both train and eval sets.
+        #   - Ensures lighting, turbidity, and camera-motion diversity
+        #     in both splits.
+        #   - Prevents most observations from being entirely in one split.
+        #
+        # APPROACH:
+        #   For each video:
+        #     • Sort its annotated frame numbers.
+        #     • Divide frames into repeating temporal segments:
+        #         first N% for training, next M% for eval, repeat.
+        #     • Store per-video sets of frame indices for later lookup.
+        #
+        # PARAMETERS:
+        segment_train_ratio = 0.10   # 10% of annotated frames → training
+        segment_eval_ratio  = 0.05   # 5% of annotated frames → evaluation
+        segment_total_ratio = segment_train_ratio + segment_eval_ratio
+
+        # Dictionary to store split info for each video:
+        #   video_frame_splits[video_name] = { "train": set(), "eval": set() }
+        video_frame_splits = {}
+
+        for video_name, observations_for_video in annotations_by_video.items():
+            # Collect *all annotated frame numbers* for this video
+            annotated_frames = sorted({
+                kf["framenum"]
+                for obs in observations_for_video
+                for kf in obs["keyframes"]
+                if "framenum" in kf
+            })
+
+            if not annotated_frames:
+                continue  # skip videos without annotations
+
+            total_annotated = len(annotated_frames)
+            train_frames = set()
+            eval_frames = set()
+
+            # Index pointer through the annotated frame list
+            start = 0
+            while start < total_annotated:
+                # Determine slice boundaries based on ratios
+                train_end = int(start + total_annotated * segment_train_ratio)
+                eval_end  = int(train_end + total_annotated * segment_eval_ratio)
+
+                # Clamp the indices to avoid overshooting the list
+                train_end = min(train_end, total_annotated)
+                eval_end  = min(eval_end, total_annotated)
+
+                # Assign frames in the current segment window
+                for f in annotated_frames[start:train_end]:
+                    train_frames.add(f)
+                for f in annotated_frames[train_end:eval_end]:
+                    eval_frames.add(f)
+
+                # Move to the next temporal block
+                start = eval_end
+
+            # Optionally add a small random temporal offset so that
+            # the train/eval cycle doesn’t align perfectly across videos.
+            # (Comment out if you prefer deterministic splits.)
+            if len(annotated_frames) > 10:
+                offset = random.randint(-int(0.01 * total_annotated), int(0.01 * total_annotated))
+                if offset > 0:
+                    train_frames = {f + offset for f in train_frames if f + offset < annotated_frames[-1]}
+                    eval_frames  = {f + offset for f in eval_frames if f + offset < annotated_frames[-1]}
+
+            # Store split results for this video
+            video_frame_splits[video_name] = {
+                "train": train_frames,
+                "eval":  eval_frames
+            }
+
+            print(f"[INFO] {video_name}: "
+                f"{len(train_frames)} train frames, {len(eval_frames)} eval frames "
+                f"({round(len(train_frames)/(len(train_frames)+len(eval_frames))*100, 1)}% train)")
+
+
+       # ---------------------------------------------------------
+        # Register observations in the dataset based on segmented temporal splits
+        # ---------------------------------------------------------
+        # GOAL:
+        #   Assign each observation to either 'train' or 'val' based on where
+        #   most of its keyframes fall relative to the segmented temporal split
+        #   pattern defined in video_frame_splits.
+        #
+        # WHY:
+        #   - Keeps DB records consistent with frame-level dataset creation.
+        #   - Avoids arbitrary single cutoff (uses the repeating segment pattern).
+        #   - Each observation is tied to exactly one split for clarity.
+        #
+        dataset_observations_payload = []
+        numEvals = 0
+        numTrains = 0
+
+        for obs in observations:
+            video_name = obs["video_source"]
+            split_info = video_frame_splits.get(video_name)
+            if not split_info:
+                continue  # skip if video missing or no split info
+
+            # Collect all annotated frame numbers for this observation
+            frame_numbers = [kf["framenum"] for kf in obs["keyframes"] if "framenum" in kf]
+            if not frame_numbers:
+                continue
+
+            # Count how many frames for this observation fall in each split set
+            train_hits = sum(1 for f in frame_numbers if f in split_info["train"])
+            eval_hits  = sum(1 for f in frame_numbers if f in split_info["eval"])
+
+            # Assign based on which side has more keyframes
+            if train_hits >= eval_hits:
+                inclusion_type = "train"
+                numTrains += 1
+            else:
+                inclusion_type = "eval"
+                numEvals += 1
+
+            dataset_observations_payload.append({
+                "dataset_id": datasetId,
+                "observation_id": obs["observation_id"],
+                "inclusion_type": inclusion_type,
+                "selection_method": "temporal_segmented_split",
+                "weight": 1,
+                "notes": (
+                    f"{video_name}: {len(frame_numbers)} keyframes, "
+                    f"{train_hits} in train segments, {eval_hits} in eval segments "
+                    f"→ assigned to {inclusion_type.upper()}"
+                )
+            })
+
+        print(f"[INFO] Observations assigned to splits — Train: {numTrains}, Eval: {numEvals}")
+        
+
+        # Send all in one call to the database
+        result = functions.createDatabaseDatasetObservationsBulk(dataset_observations_payload)
+        if result:
+            print(f"[DB] Registered {result.get('inserted')} dataset_observations (temporal segmented split).")
+        else:
+            print("[DB] Failed to register dataset_observations for segmented temporal splits.")
+
+        """ # Send all in one call
+        result = functions.createDatabaseDatasetObservationsBulk(dataset_observations_payload)
+        if result:
+            print(f"[DB] Registered {result.get('inserted')} dataset_observations via temporal split.")
+        else:
+            print("[DB] Failed to register dataset_observations for temporal splits.") """
+        
+        # ---------------------------------------------------------
+        # Build observation_id → split lookup (SOURCE OF TRUTH)
+        # ---------------------------------------------------------
+        observation_split_map = {
+            row["observation_id"]: row["inclusion_type"]
+            for row in dataset_observations_payload
+        }
+
+        
 
         # Process videos
         for video_name, observations in annotations_by_video.items():
@@ -357,17 +586,45 @@ def open_dataset_builder(parent):
 
                 # Only save the frame and labels if annotations exist for this frame
                 if target_annotations:
-                    dataset_type = "train" if any(annotation.observation_id in train_ids for annotation in target_annotations.values()) else "eval"
+                    """ dataset_type = "train" if any(annotation.observation_id in train_ids for annotation in target_annotations.values()) else "eval"
+                    images_folder = train_images_folder if dataset_type == "train" else eval_images_folder
+                    labels_folder = train_labels_folder if dataset_type == "train" else eval_labels_folder """
+
+                    # ---------------------------------------------------------
+                    # Determine whether this frame belongs to train or eval
+                    # ---------------------------------------------------------
+                    """ split = video_frame_splits.get(video_name, {})
+                    if frame_index in split.get("train", set()):
+                        dataset_type = "train"
+                    elif frame_index in split.get("eval", set()):
+                        dataset_type = "eval"
+                    else:
+                        dataset_type = "train"  # fallback if frame not in either set """
+                    
+                    # ---------------------------------------------------------
+                    # instead Determine dataset split based on observation assignment
+                    # ---------------------------------------------------------
+                    frame_obs_ids = {ann.observation_id for ann in target_annotations.values()}
+                    frame_splits = {observation_split_map.get(obs_id) for obs_id in frame_obs_ids}
+
+                    if len(frame_splits) == 1:
+                        dataset_type = next(iter(frame_splits))
+                    else:
+                        # Mixed observation frame — force to train to prevent eval leakage
+                        dataset_type = "train"
+
                     images_folder = train_images_folder if dataset_type == "train" else eval_images_folder
                     labels_folder = train_labels_folder if dataset_type == "train" else eval_labels_folder
 
                     # Save the image
-                    image_filename = f"{video_name}_frame_{frame_index:04d}.jpg"
+                    obs_ids_str = "_".join(str(o) for o in sorted(frame_obs_ids))
+                    image_filename = f"{video_name}_obs_{obs_ids_str}_frame_{frame_index:04d}.jpg"
                     image_path = os.path.join(images_folder, image_filename)
                     cv2.imwrite(image_path, frame)
 
                     # Save the YOLO label
-                    label_filename = f"{video_name}_frame_{frame_index:04d}.txt"
+                    #label_filename = f"{video_name}_frame_{frame_index:04d}.txt"
+                    label_filename = image_filename.replace(".jpg", ".txt")
                     label_path = os.path.join(labels_folder, label_filename)
                     with open(label_path, "w") as label_file:
                         for annotation in target_annotations.values():
@@ -411,6 +668,116 @@ def open_dataset_builder(parent):
                                 p = 1
                             else:
                                 print(f"Empty cropped annotation for {human_review_filename}. Skipping save.")
+                    # ============================================================
+                    # Optional: Generate zoomed-in crops with black bar padding
+                    # ============================================================
+                    generate_crops = True            # Toggle to enable/disable crop generation
+                    include_overlapping_annotations = True
+                    crop_size = 640                  # YOLO training size
+                    pad_factor = 1.5                 # Amount of context around target (1.0 = tight)
+
+                    def letterbox_black(image, new_shape=(640, 640)):
+                        """Resize image while preserving aspect ratio using black (0,0,0) padding."""
+                        h, w = image.shape[:2]
+                        r = min(new_shape[0] / h, new_shape[1] / w)
+                        new_unpad = (int(round(w * r)), int(round(h * r)))
+                        resized = cv2.resize(image, new_unpad, interpolation=cv2.INTER_LINEAR)
+                        dw = new_shape[0] - new_unpad[0]
+                        dh = new_shape[1] - new_unpad[1]
+                        top = dh // 2
+                        bottom = dh - top
+                        left = dw // 2
+                        right = dw - left
+                        return cv2.copyMakeBorder(
+                            resized, top, bottom, left, right,
+                            borderType=cv2.BORDER_CONSTANT, value=(0, 0, 0)
+                        )
+
+                    if generate_crops:
+                        # Prepare folder structure for cropped dataset
+                        crop_images_folder = os.path.join(output_dataset_folder, "crops", dataset_type, "images")
+                        crop_labels_folder = os.path.join(output_dataset_folder, "crops", dataset_type, "labels")
+                        os.makedirs(crop_images_folder, exist_ok=True)
+                        os.makedirs(crop_labels_folder, exist_ok=True)
+
+                        # Loop through each annotation in this frame
+                        for ann_focus in target_annotations.values():
+                            # --- Convert normalized to pixel coordinates (float precision) ---
+                            cx = ann_focus.x_center * width
+                            cy = ann_focus.y_center * height
+                            bw = ann_focus.width_norm * width
+                            bh = ann_focus.height_norm * height
+
+                            # --- Define crop region, expanded by pad_factor ---
+                            pad_w = bw * (pad_factor - 1)
+                            pad_h = bh * (pad_factor - 1)
+                            x1 = max(0, int(cx - bw / 2 - pad_w))
+                            y1 = max(0, int(cy - bh / 2 - pad_h))
+                            x2 = min(width,  int(cx + bw / 2 + pad_w))
+                            y2 = min(height, int(cy + bh / 2 + pad_h))
+
+                            # --- Skip degenerate crops ---
+                            if x2 - x1 < 2 or y2 - y1 < 2:
+                                continue
+
+                            # --- Extract crop ---
+                            crop = frame[y1:y2, x1:x2]
+                            if crop.size == 0:
+                                continue
+
+                            # --- Resize with black padding, preserve aspect ratio ---
+                            crop_resized = letterbox_black(crop, (crop_size, crop_size))
+
+                            # ---------------------------------------------------------------
+                            # Include all annotations that overlap this crop
+                            # ---------------------------------------------------------------
+                            included_labels = []
+                            for ann_other in target_annotations.values():
+                                ox = ann_other.x_center * width
+                                oy = ann_other.y_center * height
+                                ow = ann_other.width_norm * width
+                                oh = ann_other.height_norm * height
+
+                                # Box corners
+                                ox1, oy1 = ox - ow / 2, oy - oh / 2
+                                ox2, oy2 = ox + ow / 2, oy + oh / 2
+
+                                # Check for overlap (require ≥10% of box area inside crop)
+                                inter_w = max(0, min(ox2, x2) - max(ox1, x1))
+                                inter_h = max(0, min(oy2, y2) - max(oy1, y1))
+                                inter_area = inter_w * inter_h
+                                box_area = ow * oh
+                                overlap_ratio = inter_area / box_area if box_area > 0 else 0
+
+                                if ann_other is ann_focus or (include_overlapping_annotations and overlap_ratio > 0.1):
+                                    new_x = min(max((ox - x1) / (x2 - x1), 0), 1)
+                                    new_y = min(max((oy - y1) / (y2 - y1), 0), 1)
+                                    new_w = min(max(ow / (x2 - x1), 0), 1)
+                                    new_h = min(max(oh / (y2 - y1), 0), 1)
+
+                                    # Skip boxes mostly outside the crop
+                                    if overlap_ratio < 0.05:
+                                        continue
+
+                                    included_labels.append(
+                                        (classnames_to_ids[ann_other.class_name],
+                                        new_x, new_y, new_w, new_h)
+                                    )
+
+                            # --- Skip if no valid labels ---
+                            if not included_labels:
+                                continue
+
+                            # --- Save cropped image and label ---
+                            crop_filename = f"{video_name}_obs_{ann_focus.observation_id}_{ann_focus.subset}_frame{frame_index:04d}.jpg"
+                            crop_path = os.path.join(crop_images_folder, crop_filename)
+                            cv2.imwrite(crop_path, crop_resized)
+
+                            crop_label_path = os.path.join(crop_labels_folder, crop_filename.replace(".jpg", ".txt"))
+                            with open(crop_label_path, "w") as lf:
+                                for cid, nx, ny, nw, nh in included_labels:
+                                    lf.write(f"{cid} {nx:.6f} {ny:.6f} {nw:.6f} {nh:.6f}\n")
+
 
                 frame_index += 1
 
@@ -432,7 +799,7 @@ def open_dataset_builder(parent):
 # Parameters:
 #   dataset_info (dict) – full dataset record from the API
 # ------------------------------------------------------------
-def startMlTraining(dataset_info, config):
+def startMlTraining(dataset_info, config, phase="frames"):
     print("[ML] Starting training process...")
     print(f"[ML] Dataset: {dataset_info['name']}")
     print(f"[ML] Location: {dataset_info['location']}")
@@ -449,57 +816,81 @@ def startMlTraining(dataset_info, config):
         print(str(e))
 
 
-    # Paths to dataset and model
+    # ------------------------------------------------------------
+    # Phase-specific YAML selection (matches your actual structure)
+    # ------------------------------------------------------------
     yolo_dataset_folder = os.path.abspath(dataset_info["location"])
-    classnames_file = os.path.join(yolo_dataset_folder, "classnames.yaml")
-    train_images_folder = os.path.join(yolo_dataset_folder, "train", "images")
-    eval_images_folder = os.path.join(yolo_dataset_folder, "eval", "images")
+
+    yaml_map = {
+        "frames": os.path.join(yolo_dataset_folder, "frames-classnames.yaml"),
+        "crops": os.path.join(yolo_dataset_folder, "crops-classnames.yaml"),
+        "mixed": os.path.join(yolo_dataset_folder, "mixed-classnames.yaml"),
+    }
+
+    classnames_file = yaml_map.get(phase)
+    if not classnames_file or not os.path.exists(classnames_file):
+        print(f"[ERROR] Missing classnames.yaml for phase '{phase}' at {classnames_file}")
+        exit()
+
+    print(f"[INFO] Using dataset YAML for phase '{phase}': {classnames_file}")
 
     # Ensure the dataset and classnames file exist
     if not os.path.exists(yolo_dataset_folder) or not os.path.exists(classnames_file):
         print("Error: `yolo_dataset` or `classnames.yaml` not found. Ensure the dataset is prepared.")
         exit()
 
+    print(f"[VERIFY] Dataset YAML path: {classnames_file}")
+
+    # Optional: confirm YOLO sees the right train/val directories
+    try:
+        import yaml
+        with open(classnames_file, "r") as f:
+            data_paths = yaml.safe_load(f)
+            train_paths = data_paths.get("train")
+            val_path = data_paths.get("val")
+
+            print(f"[VERIFY] Train paths: {train_paths}")
+            print(f"[VERIFY] Val path:   {val_path}")
+
+            # Expand and confirm they exist
+            def check_path(p):
+                if isinstance(p, list):
+                    return [os.path.exists(os.path.join(os.path.dirname(classnames_file), x)) for x in p]
+                return os.path.exists(os.path.join(os.path.dirname(classnames_file), p))
+
+            print(f"[VERIFY] Train dirs exist: {check_path(train_paths)}")
+            print(f"[VERIFY] Val dir exists:   {check_path(val_path)}")
+
+    except Exception as e:
+        print(f"[VERIFY] Failed to inspect YAML: {e}")
+
     # Model configuration
     new_model_name = config.get("new_model_name", "").strip()
-    pretrained_model_name = config["transfer_model_path"] + config["transfer_model_name"]
+
+    if config.get("transfer_model_path") and config.get("transfer_model_name"):
+        pretrained_model_name = os.path.join(
+            config["transfer_model_path"],
+            config["transfer_model_name"]
+        )
+    else:
+        pretrained_model_name = "yolov8n.pt"  # or your base model
+
     pretrained_weights = pretrained_model_name  # Pre-trained weights
     epochs = config["epochs"]  # Number of epochs for training
     batch_size = config["batch_size"]  # Batch size
+
+
+    if phase=="crops":
+        epochs = max(1, epochs // 8)
+
+    if phase=="mixed":
+        epochs = max(1, epochs // 8)
 
     # Load the model
     print(f"Loading pre-trained YOLO model: {pretrained_weights}")
 
     model = YOLO(pretrained_weights)
 
-    # --- place this immediately after: model = YOLO(pretrained_weights) ---
-    try:
-        if plots and hasattr(plots, 'clean_label'):
-            original_clean_label = plots.clean_label
-
-            def clean_label_preserve_period(label: str):
-                # Keep periods intact in class labels when YOLO generates plots
-                sanitized = original_clean_label(label)
-                if isinstance(label, str) and "." in label:
-                    sanitized = sanitized.replace(" ", ".").replace("_", ".")
-                    while ".." in sanitized:
-                        sanitized = sanitized.replace("..", ".")
-                    if "." not in sanitized:
-                        sanitized = label
-                return sanitized
-
-            plots.clean_label = clean_label_preserve_period  # apply patch
-
-        elif hasattr(model, 'names'):  # fallback if plotting helper missing
-            if isinstance(model.names, dict):
-                model.names = {i: (n.replace(".", "․") if isinstance(n, str) else n)
-                            for i, n in model.names.items()}
-            elif isinstance(model.names, list):
-                model.names = [(n.replace(".", "․") if isinstance(n, str) else n)
-                            for n in model.names]
-
-    except Exception:
-        pass
 
     device = "0" if torch.cuda.is_available() else "cpu"
 
@@ -524,7 +915,8 @@ def startMlTraining(dataset_info, config):
         output_folder = models_root  # This is the "project" folder
 
         # Full expected path
-        expected_output_path = os.path.join(output_folder, new_model_name)
+        #old#expected_output_path = os.path.join(output_folder, new_model_name)
+        expected_output_path = os.path.join(output_folder, new_model_name, phase)
 
         print(f"[INFO] YOLO training output will be saved in: {expected_output_path}")
 
@@ -591,7 +983,7 @@ def startMlTraining(dataset_info, config):
             "compute_device": compute_device,
             "train_script_commit": Path(__file__).name,
             "notes": f"Transfer training from {config['transfer_model_name']}",
-}
+        }
 
         training_run = functions.createDatabaseTrainingRun(training_run_record)
         training_run_id = training_run.get("id", None)
@@ -614,7 +1006,7 @@ def startMlTraining(dataset_info, config):
             Keeps user-named weights file updated with the latest best.pt.
             """
             
-            weights_folder = os.path.join(output_folder, config["new_model_name"], "weights")
+            weights_folder = os.path.join(output_folder, config["new_model_name"], phase, "weights")
             best_weights = os.path.join(weights_folder, "best.pt")
             user_named_weights = os.path.join(weights_folder, f"{config['new_model_name']}.pt")
 
@@ -684,8 +1076,8 @@ def startMlTraining(dataset_info, config):
                     imgsz=640,
                     workers=16,
                     patience=config["patience"],
-                    project=output_folder,
-                    name=new_model_name,
+                    project=os.path.join(output_folder, new_model_name),
+                    name=phase,
                     device=device,
                     exist_ok=True,  # stops yolo from creating folder2 everytime
                     batch=batch_size
@@ -698,11 +1090,14 @@ def startMlTraining(dataset_info, config):
                 imgsz=640,
                 workers=16,
                 patience=config["patience"],
-                project=output_folder,
-                name=new_model_name,
+                project=os.path.join(output_folder, new_model_name),
+                name=phase,
                 device=device,
+                exist_ok=True,  # stops yolo from creating folder2 everytime
                 batch=batch_size
             )
+
+        
 
         # Evaluate the model
         print("Evaluating model...")
@@ -712,23 +1107,25 @@ def startMlTraining(dataset_info, config):
         rec  = metrics.results_dict.get("metrics/recall(B)", None)
         f1_score = (2 * prec * rec / (prec + rec)) if (prec and rec and (prec + rec) > 0) else None
 
+        phase_root = os.path.join(output_folder, new_model_name, phase)
+
         summary_record = {
             "training_run_id": training_run_id,
             "dataset_split": "val",
-            "precision": prec,  # or metrics.results_dict["metrics/precision(B)"]
+            "precision": prec,
             "recall": rec,
             "map50": metrics.results_dict.get("metrics/mAP50(B)", None),
             "map5095": metrics.results_dict.get("metrics/mAP50-95(B)", None),
             "f1_score": f1_score,
             "fitness": metrics.results_dict.get("fitness", None),
-            "confusion_matrix_path": os.path.join(output_folder, new_model_name, "confusion_matrix.png"),
-            "result_plot_path": os.path.join(output_folder, new_model_name, "results.png"),
-            "confusion_matrix_norm_path": os.path.join(output_folder, new_model_name, "confusion_matrix_normalized.png"),
-            "box_f1_curve_path": os.path.join(output_folder, new_model_name, "BoxF1_curve.png"),
-            "box_p_curve_path": os.path.join(output_folder, new_model_name, "BoxP_curve.png"),
-            "box_pr_curve_path": os.path.join(output_folder, new_model_name, "BoxPR_curve.png"),
-            "box_r_curve_path": os.path.join(output_folder, new_model_name, "BoxR_curve.png"),
-            "labels_plot_path": os.path.join(output_folder, new_model_name, "labels.png"),
+            "confusion_matrix_path": os.path.join(phase_root, "confusion_matrix.png"),
+            "result_plot_path": os.path.join(phase_root, "results.png"),
+            "confusion_matrix_norm_path": os.path.join(phase_root, "confusion_matrix_normalized.png"),
+            "box_f1_curve_path": os.path.join(phase_root, "BoxF1_curve.png"),
+            "box_p_curve_path": os.path.join(phase_root, "BoxP_curve.png"),
+            "box_pr_curve_path": os.path.join(phase_root, "BoxPR_curve.png"),
+            "box_r_curve_path": os.path.join(phase_root, "BoxR_curve.png"),
+            "labels_plot_path": os.path.join(phase_root, "labels.png"),
             "timestamp": datetime.now().isoformat(),
         }
 
@@ -811,12 +1208,12 @@ def startMlTraining(dataset_info, config):
         print("Generating evaluation charts...")
 
         # Path to results
-        training_results_file = os.path.join(output_folder, new_model_name, "results.csv")
+        training_results_file = os.path.join(output_folder, new_model_name, phase, "results.csv")
 
         # ------------------------------------------------------------
         # Update ml_model record after training completes
         # ------------------------------------------------------------
-        weights_folder = os.path.join(output_folder, new_model_name, "weights")
+        weights_folder = os.path.join(output_folder, new_model_name, phase, "weights")
 
         # This folder should contain best.pt, last.pt, etc.
         trained_weights_file = os.path.join(weights_folder, "best.pt")
@@ -835,7 +1232,7 @@ def startMlTraining(dataset_info, config):
         # ------------------------------------------------------------
         # Final weight renaming (keep last.pt, rename best.pt → modelname.pt)
         # ------------------------------------------------------------
-        weights_folder = os.path.join(output_folder, new_model_name, "weights")
+        weights_folder = os.path.join(output_folder, new_model_name, phase, "weights")
         best_path = os.path.join(weights_folder, "best.pt")
         named_path = os.path.join(weights_folder, f"{config['new_model_name']}.pt")
 
@@ -867,7 +1264,10 @@ def startMlTraining(dataset_info, config):
 
         # Generate training charts
         if os.path.exists(training_results_file):
-            plot_training_results(training_results_file, os.path.join(output_folder, "transfer_training"))
+            plot_training_results(
+                training_results_file,
+                os.path.join(output_folder, new_model_name, phase)
+            )
 
         # Print final metrics
         print("\nFinal Metrics:")
@@ -883,10 +1283,115 @@ def startMlTraining(dataset_info, config):
 
 
         print("Training and evaluation complete. Results saved in:", output_folder)
-    except Exception as e:
 
-         print("There was an exception" + str(e))
+    except KeyboardInterrupt:
+        print("\n[WARNING] Training interrupted by user (Ctrl-C). Finalizing current results...")
+
+    finally:
+        # This block runs whether training finishes or is interrupted.
+        try:
+            print("Evaluating model after interruption or completion...")
+            metrics = model.val()
+
+            # Proceed with your summary_record / DB updates exactly as before
+            prec = metrics.results_dict.get("metrics/precision(B)", None)
+            rec  = metrics.results_dict.get("metrics/recall(B)", None)
+            f1_score = (2 * prec * rec / (prec + rec)) if (prec and rec and (prec + rec) > 0) else None
+
+            phase_root = os.path.join(output_folder, new_model_name, phase)
+
+            summary_record = {
+                "training_run_id": training_run_id,
+                "dataset_split": "val",
+                "precision": prec,
+                "recall": rec,
+                "map50": metrics.results_dict.get("metrics/mAP50(B)", None),
+                "map5095": metrics.results_dict.get("metrics/mAP50-95(B)", None),
+                "f1_score": f1_score,
+                "fitness": metrics.results_dict.get("fitness", None),
+
+                # --- ADD THESE ---
+                "confusion_matrix_path": os.path.join(phase_root, "confusion_matrix.png"),
+                "result_plot_path": os.path.join(phase_root, "results.png"),
+                "confusion_matrix_norm_path": os.path.join(phase_root, "confusion_matrix_normalized.png"),
+                "box_f1_curve_path": os.path.join(phase_root, "BoxF1_curve.png"),
+                "box_p_curve_path": os.path.join(phase_root, "BoxP_curve.png"),
+                "box_pr_curve_path": os.path.join(phase_root, "BoxPR_curve.png"),
+                "box_r_curve_path": os.path.join(phase_root, "BoxR_curve.png"),
+                "labels_plot_path": os.path.join(phase_root, "labels.png"),
+
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            summary_result = functions.createDatabaseMetricsSummary(summary_record)
+            summary_id = summary_result.get("id")
+
+            # Generate and save both aggregate + per-species curves
+            saveAllMetricsCurves(metrics, summary_id)
+
+            print("[INFO] Final metrics and plots generated successfully.")
+
+        except Exception as e:
+            print(f"[ERROR] Finalization failed: {e}")
+            
+
+    # ------------------------------------------------------------
+    # Return summary info for pipeline chaining
+    # ------------------------------------------------------------
+    try:
+        trainer = getattr(model, "trainer", None)
+        save_dir = trainer.save_dir if trainer else os.path.join(output_folder, new_model_name, phase)
+    except Exception:
+        save_dir = os.path.join(output_folder, new_model_name, phase)
+
+    return {
+        "phase": phase,
+        "save_dir": save_dir,
+        "metrics": metrics.results_dict if metrics else {},
+    }
     
+
+def runTrainingPipeline(dataset_info, config):
+    """
+    Runs the 3-phase YOLO training pipeline:
+        1. crops
+        2. frames
+        3. mixed
+    Reuses best weights between phases.
+    """
+    print("[PIPELINE] Starting sequential training pipeline...")
+
+    # Keep track of current weights
+    current_weights = os.path.join(config["transfer_model_path"], config["transfer_model_name"])
+    config["transfer_model_name"] = os.path.basename(current_weights)
+
+    # Ordered phases
+    phases = ["crops", "mixed", "frames"]
+
+    for phase in phases:
+        print(f"\n[PIPELINE] ---- Phase: {phase.upper()} ----")
+
+        # Run a single-phase training
+        result = startMlTraining(dataset_info, config, phase=phase)
+
+        if not result:
+            print(f"[PIPELINE] Phase '{phase}' returned no result, skipping.")
+            continue
+
+        # Locate best weights from this phase
+        save_dir = result.get("save_dir")
+        best_path = os.path.join(save_dir, "weights", "best.pt") if save_dir else None
+
+        if best_path and os.path.exists(best_path):
+            # Pass best weights forward
+            config["transfer_model_name"] = os.path.basename(best_path)
+            config["transfer_model_path"] = os.path.dirname(best_path)
+            print(f"[PIPELINE] Using {best_path} as starting weights for next phase.")
+        else:
+            print(f"[PIPELINE] No best.pt found for phase '{phase}', keeping previous weights.")
+
+    print("\n[PIPELINE] All phases complete.")
+
 
 
 def saveAllMetricsCurves(metrics, summary_id):
@@ -1291,7 +1796,8 @@ def open_training_config_window(parent, dataset_info):
 
         print("[TRAINING CONFIG]", config)
         popup.destroy()
-        startMlTraining(dataset_info, config)
+        #startMlTraining(dataset_info, config)
+        runTrainingPipeline(dataset_info, config)
 
     ctk.CTkButton(frame, text="Start Training", command=start_training, width=160).pack(pady=(20, 5))
 

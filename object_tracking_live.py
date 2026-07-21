@@ -35,7 +35,16 @@ COMNAME_TO_TAXSERIAL = {
 
     "Thorny sea star": 157176,
     "UI sea star": 97,
-    "White spine sea cucumber": 656044
+    "White spine sea cucumber": 656044,
+    "Vermilion Rockfish": 166729,
+    "Olive/Yellowtail Rockfish complex": 30,
+    "Canary Rockfish": 166734,
+    "Blue/Deacon Rockfish": 166730,
+    "Gopher Rockfish": 166767,
+    "Copper Rockfish": 166713,
+    "Lingcod": 167116,
+    "Quillback Rockfish": 166726
+
     # add more...
 }
 
@@ -70,11 +79,11 @@ def calculate_iou(box1, box2):
 
 class Args:
     def __init__(self):
-        self.confidence_threshold = 0.35
+        self.confidence_threshold = 0.15
         self.track_thresh = 0.30
-        self.match_thresh = 0.50
+        self.match_thresh = 0.70
         self.track_buffer = 240
-        self.mot20 = True
+        self.mot20 = False
 
 def select_folder():
     root = Tk()
