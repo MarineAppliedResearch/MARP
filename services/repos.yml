@@ -1,0 +1,32 @@
+repositories:
+  marp-api:
+    repository: MarineAppliedResearch/MARE_API
+    role: Scientific data API
+    status: active
+    planned_name: marp-api
+
+  marp-video-server:
+    repository: MarineAppliedResearch/marp-jellyfin
+    role: Video service backend
+    status: active
+    planned_name: marp-video-server
+
+  marp-inference-worker:
+    repository: MarineAppliedResearch/marp-inference-worker
+    role: Machine-learning inference service
+    status: active
+
+  video-processing-gui:
+    repository: MarineAppliedResearch/VIDEO_PROCESSING_GUI
+    role: Legacy and transition desktop client
+    status: transition
+
+  marp-video-player:
+    repository: null
+    role: Reusable JavaScript/WebCodecs video player
+    status: planned-extraction
+
+  marp-web:
+    repository: null
+    role: MARP browser application
+    status: planned
