@@ -1,32 +1,87 @@
+# MARP component registry.
+#
+# The canonical list of components that make up a MARP deployment. Every field
+# below is verified against the actual repositories, not aspirational.
+#
+# Fields:
+#   repository  - GitHub repository, or null if it does not exist yet
+#   directory   - clone location relative to this umbrella repository root
+#   role        - what the component does
+#   runtime     - what must be installed to build or run it
+#   status      - active | transition | undecided
+#   notes       - anything a developer or installer needs to know
+#
+# Keep the /directory entries in sync with the umbrella .gitignore.
+
 repositories:
   marp-api:
     repository: MarineAppliedResearch/MARE_API
-    role: Scientific data API
+    directory: MARE_API
+    role: MARP API and application backend
+    runtime: Node 22 (pinned in .nvmrc), PostgreSQL
     status: active
     planned_name: marp-api
+    notes: >
+      Also serves the MARP browser applications from frontend/apps (video
+      player, landing page, dashboards). Splitting the frontend into a separate
+      component is a possible future change, not current scope. Runs and
+      debugs locally on Windows via VS Code as of 2026-08-31.
 
   marp-video-server:
     repository: MarineAppliedResearch/marp-jellyfin
-    role: Video service backend
+    directory: marp-jellyfin
+    role: Video service backend, forked from Jellyfin
+    runtime: .NET SDK (pinned in global.json)
     status: active
     planned_name: marp-video-server
+    notes: >
+      Full Jellyfin fork, roughly 93 MB checked out. Inherits Jellyfin's own
+      deployment/ directory, so it is the only component with an existing
+      container build path.
 
   marp-inference-worker:
     repository: MarineAppliedResearch/marp-inference-worker
+    directory: marp-inference-worker
     role: Machine-learning inference service
+    runtime: Python >= 3.10, ultralytics, NVIDIA GPU
     status: active
+    notes: >
+      Vendors ByteTrack as a subdirectory. GPU-dependent, so it is the least
+      portable component to run, though not to build.
 
   video-processing-gui:
     repository: MarineAppliedResearch/VIDEO_PROCESSING_GUI
-    role: Legacy and transition desktop client
+    directory: VIDEO_PROCESSING_GUI
+    role: Desktop annotation and review client
+    runtime: .NET Framework 4.7.2, WPF
     status: transition
+    notes: >
+      Actively developed and supported: this is what people use today. The
+      intent is to replace it with a browser-based tool, but it stays
+      installable and maintained throughout the overlap. Windows-only and not
+      containerizable, because .NET Framework 4.7.2 predates .NET Core.
 
   marp-video-player:
     repository: null
+    directory: marp-video-player
     role: Reusable JavaScript/WebCodecs video player
-    status: planned-extraction
+    runtime: Node
+    status: undecided
+    notes: >
+      Currently lives inside marp-api at video-engine/ and is self-contained
+      there, but has no package.json and is not yet a standalone package.
+      Extracting it is a possible future change; marp-api keeping its browser
+      tools for now means there is no immediate need.
 
   marp-web:
     repository: null
-    role: MARP browser application
-    status: planned
+    directory: marp-web
+    role: Undetermined
+    runtime: unknown
+    status: undecided
+    notes: >
+      Listed in earlier planning but its purpose has not been decided. It may
+      turn out to be the browser replacement for video-processing-gui, which
+      would make it a real component, or it may be unnecessary because
+      marp-api already serves the browser applications. Do not treat as
+      planned work until the question is settled.

@@ -1,0 +1,46 @@
+# MARP umbrella repository.
+#
+# This repository is the workspace root for the MARP ecosystem. Each component
+# is cloned as a subdirectory here but remains its own independent Git
+# repository, so every component directory must stay ignored. Without this, the
+# umbrella would try to absorb them as untracked files, including roughly 93 MB
+# of marp-jellyfin.
+#
+# Keep this list in sync with services/repos.yml when a component is added.
+
+# --- Component repositories (each is its own Git repository) ---
+/MARE_API/
+/marp-jellyfin/
+/marp-inference-worker/
+/VIDEO_PROCESSING_GUI/
+
+# Reserved for components that do not exist yet; ignored in advance so an
+# accidental clone is never committed.
+/marp-web/
+/marp-video-player/
+
+# --- Local workspace state ---
+.vscode/settings.json
+*.local
+*.log
+
+# --- OS noise ---
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# --- Python (legacy/ scripts and any tooling that lands here) ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# --- Node (if ecosystem tooling lands here) ---
+node_modules/
+
+# --- Environment files: never commit real configuration ---
+.env
+.env.*
+!.env.example
