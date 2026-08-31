@@ -1,37 +1,51 @@
 # MARP component registry.
 #
-# The canonical list of components that make up a MARP deployment. Every field
-# below is verified against the actual repositories, not aspirational.
+# Two categories, because they are consumed differently:
+#
+#   components  - part of a MARP deployment. These are what an installer offers
+#                 and what a running MARP system consists of.
+#   related     - NOT part of a MARP deployment. Present in the workspace so
+#                 they can be developed and kept in sync with the components
+#                 they talk to. An installer must never offer these.
+#
+# Every field is verified against the actual repositories, not aspirational.
 #
 # Fields:
 #   repository  - GitHub repository, or null if it does not exist yet
 #   directory   - clone location relative to this umbrella repository root
-#   role        - what the component does
+#   role        - what it does
 #   runtime     - what must be installed to build or run it
-#   status      - active | transition | undecided
+#   platforms   - operating systems it can run on
+#   status      - active | undecided
 #   notes       - anything a developer or installer needs to know
 #
 # Keep the /directory entries in sync with the umbrella .gitignore.
 
-repositories:
+
+# ---------------------------------------------------------------------------
+# Components: the MARP system itself
+# ---------------------------------------------------------------------------
+components:
   marp-api:
     repository: MarineAppliedResearch/MARE_API
     directory: MARE_API
     role: MARP API and application backend
     runtime: Node 22 (pinned in .nvmrc), PostgreSQL
+    platforms: [linux, windows, macos]
     status: active
     planned_name: marp-api
     notes: >
       Also serves the MARP browser applications from frontend/apps (video
-      player, landing page, dashboards). Splitting the frontend into a separate
-      component is a possible future change, not current scope. Runs and
-      debugs locally on Windows via VS Code as of 2026-08-31.
+      player, landing page, dashboards). Splitting the frontend out is a
+      possible future change, not current scope. With PostgreSQL, this is the
+      smallest useful MARP install.
 
   marp-video-server:
     repository: MarineAppliedResearch/marp-jellyfin
     directory: marp-jellyfin
     role: Video service backend, forked from Jellyfin
     runtime: .NET SDK (pinned in global.json)
+    platforms: [linux, windows, macos]
     status: active
     planned_name: marp-video-server
     notes: >
@@ -44,44 +58,57 @@ repositories:
     directory: marp-inference-worker
     role: Machine-learning inference service
     runtime: Python >= 3.10, ultralytics, NVIDIA GPU
+    platforms: [linux, windows]
     status: active
     notes: >
-      Vendors ByteTrack as a subdirectory. GPU-dependent, so it is the least
-      portable component to run, though not to build.
-
-  video-processing-gui:
-    repository: MarineAppliedResearch/VIDEO_PROCESSING_GUI
-    directory: VIDEO_PROCESSING_GUI
-    role: Desktop annotation and review client
-    runtime: .NET Framework 4.7.2, WPF
-    status: transition
-    notes: >
-      Actively developed and supported: this is what people use today. The
-      intent is to replace it with a browser-based tool, but it stays
-      installable and maintained throughout the overlap. Windows-only and not
-      containerizable, because .NET Framework 4.7.2 predates .NET Core.
+      Vendors ByteTrack as a subdirectory. Requires an NVIDIA GPU to run,
+      though not to build, which makes it the least portable component to
+      deploy. Optional in a MARP install.
 
   marp-video-player:
     repository: null
     directory: marp-video-player
     role: Reusable JavaScript/WebCodecs video player
     runtime: Node
+    platforms: [linux, windows, macos]
     status: undecided
     notes: >
       Currently lives inside marp-api at video-engine/ and is self-contained
       there, but has no package.json and is not yet a standalone package.
-      Extracting it is a possible future change; marp-api keeping its browser
-      tools for now means there is no immediate need.
+      Extraction is a possible future change; marp-api keeping its browser
+      tools means there is no immediate need.
 
   marp-web:
     repository: null
     directory: marp-web
     role: Undetermined
     runtime: unknown
+    platforms: [linux, windows, macos]
     status: undecided
     notes: >
       Listed in earlier planning but its purpose has not been decided. It may
-      turn out to be the browser replacement for video-processing-gui, which
-      would make it a real component, or it may be unnecessary because
-      marp-api already serves the browser applications. Do not treat as
-      planned work until the question is settled.
+      turn out to be the browser replacement for video-processing-gui, or it
+      may be unnecessary because marp-api already serves the browser
+      applications. Not planned work until the question is settled.
+
+
+# ---------------------------------------------------------------------------
+# Related: developed alongside MARP, but not part of a MARP deployment
+# ---------------------------------------------------------------------------
+related:
+  video-processing-gui:
+    repository: MarineAppliedResearch/VIDEO_PROCESSING_GUI
+    directory: VIDEO_PROCESSING_GUI
+    role: Desktop annotation and review client
+    runtime: .NET Framework 4.7.2, WPF
+    platforms: [windows]
+    status: active
+    notes: >
+      Legacy application, and deliberately NOT part of the final MARP system.
+      It is in this workspace because it consumes the MARP API and must be
+      updated when that API changes, so developers need it checked out and
+      buildable alongside the components.
+
+      Windows-only and permanently so: .NET Framework 4.7.2 predates .NET
+      Core, so it cannot run on Linux or in a container. Any cross-platform
+      tooling must skip it rather than try to accommodate it.

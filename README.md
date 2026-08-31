@@ -25,20 +25,29 @@ MARP/                        this repository
 
 Component directories are listed in `.gitignore`. When a component is added, update both `.gitignore` and `services/repos.yml`.
 
-## Components
+## Components and related repositories
 
-`services/repos.yml` is the canonical registry, including the runtime each component needs. Summary:
+`services/repos.yml` is the canonical registry. It separates two categories, because they are used differently.
+
+**Components** make up a MARP deployment. These are what a MARP install consists of.
 
 | Component | Repository | Runtime | Status |
 | --- | --- | --- | --- |
 | MARP API and application backend | `MARE_API` | Node 22, PostgreSQL | active |
 | Video server (Jellyfin fork) | `marp-jellyfin` | .NET SDK | active |
 | ML inference service | `marp-inference-worker` | Python 3.10+, NVIDIA GPU | active |
-| Desktop annotation client | `VIDEO_PROCESSING_GUI` | .NET Framework 4.7.2, Windows only | transition |
 | Reusable video player | not extracted | Node | undecided |
 | `marp-web` | does not exist | unknown | undecided |
 
-Two entries are deliberately marked undecided rather than planned. The video player currently lives inside `MARE_API/video-engine/`, and `marp-web`'s purpose has not been settled. See `services/repos.yml` for the detail.
+`MARE_API` plus PostgreSQL is the smallest useful MARP install. The inference worker is optional.
+
+**Related repositories** are developed alongside MARP but are not part of a MARP deployment. They are in this workspace so they can be maintained against the components they talk to.
+
+| Repository | Runtime | Why it is here |
+| --- | --- | --- |
+| `VIDEO_PROCESSING_GUI` | .NET Framework 4.7.2, **Windows only** | Legacy desktop client that consumes the MARP API. Not part of the final system, but must be updated when the API changes. |
+
+Two component entries are deliberately marked undecided rather than planned. The video player currently lives inside `MARE_API/video-engine/`, and `marp-web`'s purpose has not been settled.
 
 ## Status
 
