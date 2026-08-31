@@ -14,8 +14,8 @@
 /marp-inference-worker/
 /VIDEO_PROCESSING_GUI/
 
-# Reserved for a component that does not exist yet; ignored in advance so an
-# accidental clone is never committed.
+# --- More component repositories ---
+
 /marp-video-player/
 
 # --- Local workspace state ---

@@ -66,18 +66,21 @@ components:
       deploy. Optional in a MARP install.
 
   marp-video-player:
-    repository: null
+    repository: MarineAppliedResearch/marp-video-player
     directory: marp-video-player
     role: Reusable JavaScript/WebCodecs video player
-    runtime: Node
+    runtime: Node 20+
     platforms: [linux, windows, macos]
-    status: undecided
+    status: active
     notes: >
-      Currently lives inside marp-api at video-engine/ and is self-contained
-      there, but has no package.json and is not yet a standalone package.
-      Extraction is a possible future change; marp-api keeping its browser
-      tools means there is no immediate need.
+      Extracted from marp-api on 2026-08-31; pre-extraction history remains
+      there. Builds to three self-contained bundles: ESM for import, IIFE for
+      a plain script tag, and a minified single-file build for native hosts.
+      No runtime dependencies and no network requests at load, so it works
+      offline. The IIFE global is MarpVideoEngine, which the C# WebView2 host
+      in video-processing-gui depends on.
 
+      Deliberately not consumed by marp-api: the two are disconnected.
 
 
 # ---------------------------------------------------------------------------

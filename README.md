@@ -12,6 +12,7 @@ This repository is the workspace root. Each component is cloned as a subdirector
 MARP/                        this repository
 ├── MARE_API/                component repository
 ├── marp-jellyfin/           component repository
+├── marp-video-player/       component repository
 ├── marp-inference-worker/   component repository
 ├── VIDEO_PROCESSING_GUI/    component repository
 ├── architecture/            system architecture and component boundaries
@@ -36,7 +37,7 @@ Component directories are listed in `.gitignore`. When a component is added, upd
 | MARP API and application backend | `MARE_API` | Node 22, PostgreSQL | active |
 | Video server (Jellyfin fork) | `marp-jellyfin` | .NET SDK | active |
 | ML inference service | `marp-inference-worker` | Python 3.10+, NVIDIA GPU | active |
-| Reusable video player | not extracted | Node | undecided |
+| Reusable video player | `marp-video-player` | Node 20+ | active |
 
 `MARE_API` plus PostgreSQL is the smallest useful MARP install. The inference worker is optional.
 
@@ -46,7 +47,7 @@ Component directories are listed in `.gitignore`. When a component is added, upd
 | --- | --- | --- |
 | `VIDEO_PROCESSING_GUI` | .NET Framework 4.7.2, **Windows only** | Legacy desktop client that consumes the MARP API. Not part of the final system, but must be updated when the API changes. |
 
-The video player is marked undecided rather than planned: it currently lives inside `MARE_API/video-engine/` and there is no immediate need to extract it.
+`marp-video-player` was extracted from `MARE_API` on 2026-08-31 and is now standalone, with its own build, tests, and docs. It is deliberately not a dependency of `MARE_API` — the two are disconnected.
 
 ## Status
 
