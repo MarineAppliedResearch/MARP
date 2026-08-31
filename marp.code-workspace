@@ -1,0 +1,46 @@
+{
+  "folders": [
+    {
+      "name": "MARP (workspace root)",
+      "path": "."
+    },
+    {
+      "name": "marp-api",
+      "path": "MARE_API"
+    },
+    {
+      "name": "marp-video-server (jellyfin)",
+      "path": "marp-jellyfin"
+    },
+    {
+      "name": "marp-inference-worker",
+      "path": "marp-inference-worker"
+    },
+    {
+      "name": "VIDEO_PROCESSING_GUI (related)",
+      "path": "VIDEO_PROCESSING_GUI"
+    }
+  ],
+  "settings": {
+    "files.exclude": {
+      "**/node_modules": true,
+      "**/__pycache__": true,
+      "**/.pytest_cache": true,
+      "**/*.egg-info": true
+    },
+    "search.exclude": {
+      "**/node_modules": true,
+      "**/dist": true,
+      "**/legacy": true,
+      "**/docs/developer/*.html": true
+    },
+    "git.detectSubmodules": false,
+    "git.openRepositoryInParentFolders": "never"
+  },
+  "extensions": {
+    "recommendations": [
+      "ms-python.python",
+      "ms-dotnettools.csharp"
+    ]
+  }
+}
