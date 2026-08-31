@@ -37,7 +37,6 @@ Component directories are listed in `.gitignore`. When a component is added, upd
 | Video server (Jellyfin fork) | `marp-jellyfin` | .NET SDK | active |
 | ML inference service | `marp-inference-worker` | Python 3.10+, NVIDIA GPU | active |
 | Reusable video player | not extracted | Node | undecided |
-| `marp-web` | does not exist | unknown | undecided |
 
 `MARE_API` plus PostgreSQL is the smallest useful MARP install. The inference worker is optional.
 
@@ -47,7 +46,7 @@ Component directories are listed in `.gitignore`. When a component is added, upd
 | --- | --- | --- |
 | `VIDEO_PROCESSING_GUI` | .NET Framework 4.7.2, **Windows only** | Legacy desktop client that consumes the MARP API. Not part of the final system, but must be updated when the API changes. |
 
-Two component entries are deliberately marked undecided rather than planned. The video player currently lives inside `MARE_API/video-engine/`, and `marp-web`'s purpose has not been settled.
+The video player is marked undecided rather than planned: it currently lives inside `MARE_API/video-engine/` and there is no immediate need to extract it.
 
 ## Status
 

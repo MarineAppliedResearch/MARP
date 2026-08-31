@@ -78,18 +78,6 @@ components:
       Extraction is a possible future change; marp-api keeping its browser
       tools means there is no immediate need.
 
-  marp-web:
-    repository: null
-    directory: marp-web
-    role: Undetermined
-    runtime: unknown
-    platforms: [linux, windows, macos]
-    status: undecided
-    notes: >
-      Listed in earlier planning but its purpose has not been decided. It may
-      turn out to be the browser replacement for video-processing-gui, or it
-      may be unnecessary because marp-api already serves the browser
-      applications. Not planned work until the question is settled.
 
 
 # ---------------------------------------------------------------------------
