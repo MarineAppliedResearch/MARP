@@ -8,7 +8,7 @@ This is the workspace root for the MARP ecosystem. Each subdirectory listed belo
 
 These apply to every repository in this workspace.
 
-- **Commit authorship is Isaac only.** Never add Claude as author or co-author, and never add a `Co-Authored-By` trailer. This applies to merge and squash commits too.
+- **Commit authorship is the human developer only.** Never add Claude as author or co-author, and never add a `Co-Authored-By` trailer. This applies to merge and squash commits too.
 - **Keep commit messages short.** A subject line under ~72 characters plus a few one-line bullets. Reference the issue with `Refs #NN`.
 - **Issues live where the code changes.** Cross-repo work gets a tracking issue in the `MARP` repo, referencing component issues as `MarineAppliedResearch/<repo>#<n>`.
 - **Never commit `.env` files or credentials.** Each component has a `.env.example` where applicable.
@@ -18,7 +18,7 @@ These apply to every repository in this workspace.
 
 ### marp-api — `MARE_API/`
 
-The MARP API and application backend. Also serves the browser applications from `frontend/apps/`, including the video player.
+The MARP API and application backend. Also serves the browser applications from `frontend/apps/`. The video player is no longer among them; it moved to its own repository.
 
 - **Runtime:** Node 22.22.1, pinned in `.nvmrc`. Installed via nvm-windows at `C:\nvm4w\nodejs`.
 - **Database:** development PostgreSQL runs on the Ubuntu VirtualBox VM `MARP DEV ENVIRONMENT`, reached at `localhost:5433` through a NAT port forward. Database `mare_v1`, role `mare_user`.
@@ -29,20 +29,34 @@ cd MARE_API
 npm install
 npm run dev                      # nodemon, or press F5 in VS Code
 npm test                         # 22 suites, 142 tests
-npm run test:video-engine:unit   # 12 suites, 140 tests
-npm run build:video-engine
 npx sequelize-cli db:migrate:status
 ```
 
 Serves `http://localhost:3000/`, `/api-docs`, `/developer-docs`.
 
-### The video player — `MARE_API/video-engine/`
+### marp-video-player — `marp-video-player/`
 
-Not yet its own repository. Extraction is tracked in `MARP#1`.
+Frame-accurate WebCodecs video player. Extracted from marp-api; the two are
+deliberately disconnected, and marp-api does not consume it as a dependency.
 
-Source in `video-engine/src/`, built with esbuild to `frontend/apps/VideoPlayer/dist/`. Unit tests use a separate Jest config at `video-engine/jest.config.js` with an esbuild transform, because the source is ES modules while the API suite is CommonJS. The root Jest config is scoped to `tests/` so the two do not collide.
+- **Runtime:** Node 20+. ESM package (`"type": "module"`), so CommonJS config
+  files carry a `.cjs` extension.
 
-The C# WebView2 host in `VIDEO_PROCESSING_GUI` consumes this player. See `MARE_API/docs/developer/csharp-host-integration.md`. Changing the host-facing contract affects that project.
+```bash
+cd marp-video-player
+npm install
+npm run build        # ESM, IIFE, and minified standalone bundles
+npm run serve        # player at http://localhost:8099/app/index.html
+npm test             # 140 unit tests, seconds, no dependencies
+```
+
+`npm run test:e2e` is a real browser against a real Jellyfin server and takes
+minutes. Do not run it for routine feedback; leave it to the person working.
+
+The C# WebView2 host in `VIDEO_PROCESSING_GUI` consumes this player. Its
+contract — the `MarpVideoEngine` global, the `postMessage` protocol, and
+`app/player.html`'s query parameters — must not change casually. See that
+repository's own `CLAUDE.md`.
 
 ### marp-video-server — `marp-jellyfin/`
 
@@ -70,16 +84,27 @@ Legacy Windows desktop annotation client. **Not part of a MARP deployment** — 
 
 ## Cross-component work
 
-The API and the player are the same repository today, so a change to both is one commit.
+Every component is its own repository, so a change spanning two of them is two
+branches, two pull requests, and two merges. Open a tracking issue in `MARP`
+and reference the component issues from it.
 
-A change spanning the API and the GUI is two repositories and two commits. The coupling points are the HTTP API surface and the WebView2 player contract. Nothing currently detects when an API change breaks the GUI — that gap is known and untracked.
+The coupling points that matter:
+
+| Between | Contract |
+| --- | --- |
+| marp-api and VIDEO_PROCESSING_GUI | the HTTP API surface |
+| marp-video-player and VIDEO_PROCESSING_GUI | the WebView2 bridge, the `MarpVideoEngine` global, and `player.html`'s query parameters |
+| marp-api and marp-video-server | the Jellyfin API |
+
+Nothing detects when a change on one side breaks the other. That gap is known
+and untracked.
 
 ## Known gaps
 
-- `marp-jellyfin` cannot be built locally (needs .NET 9 SDK).
-- `marp-inference-worker` virtualenv needs recreating.
+- `marp-jellyfin` cannot be built locally (needs .NET 9 SDK). Deferred deliberately; it runs on the VM.
+- `marp-inference-worker` virtualenv needs recreating against Python 3.12.
 - No cross-component build or test command exists; each component is built on its own.
-- Nothing verifies the GUI still works against a changed API.
+- Nothing verifies the GUI still works against a changed API or a changed player.
 
 ## Environment note
 

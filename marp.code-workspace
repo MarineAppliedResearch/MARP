@@ -9,6 +9,10 @@
       "path": "MARE_API"
     },
     {
+      "name": "marp-video-player",
+      "path": "marp-video-player"
+    },
+    {
       "name": "marp-video-server (jellyfin)",
       "path": "marp-jellyfin"
     },
