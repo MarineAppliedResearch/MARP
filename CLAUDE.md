@@ -99,13 +99,22 @@ The coupling points that matter:
 Nothing detects when a change on one side breaks the other. That gap is known
 and untracked.
 
+## How things are wired right now
+
+Facts that are easy to miss and expensive to rediscover.
+
+- **The GUI talks to the development API.** `VIDEO_PROCESSING_GUI/MAREGUI_PROOFofCONCEPT/data/API_IP_ADDRESS.txt` holds `http://localhost:3000`. It is a tracked file, changed to the production address when building for production.
+- **Production is a long way behind.** `MARE_API` `master` is over 120 commits behind `develop` and is architecturally older: routes are registered inline in `server.js`, with no `routes/` directory. Anything shipped to production has to be written in that older shape. Tracked as `MARE_API#49`, which also blocks releasing the current GUI to production.
+- **Node needs to be on PATH explicitly** in a shell that was started before nvm-windows was installed: prepend `C:
+vm4w
+odejs`. In VS Code, fully quitting and reopening fixes it.
+- **Building the GUI from a terminal** needs `msbuild` located through `vswhere`, and output redirected away from the repository. See that repository's own `CLAUDE.md`.
+- **Playwright's browser is installed** on this machine already; a new machine needs `npx playwright install chromium` once.
+
 ## Known gaps
 
 - `marp-jellyfin` cannot be built locally (needs .NET 9 SDK). Deferred deliberately; it runs on the VM.
+- `MARE_API` has 58 dependency security advisories on `develop`, untracked.
 - `marp-inference-worker` virtualenv needs recreating against Python 3.12.
 - No cross-component build or test command exists; each component is built on its own.
 - Nothing verifies the GUI still works against a changed API or a changed player.
-
-## Environment note
-
-Node was installed via nvm-windows after VS Code was already running. If `node` is not found in a terminal or a launch configuration, fully quit and reopen VS Code so it picks up the updated `PATH`.
