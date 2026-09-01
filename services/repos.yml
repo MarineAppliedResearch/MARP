@@ -27,8 +27,8 @@
 # ---------------------------------------------------------------------------
 components:
   marp-api:
-    repository: MarineAppliedResearch/MARE_API
-    directory: MARE_API
+    repository: MarineAppliedResearch/MARP_API
+    directory: MARP_API
     role: MARP API and application backend
     runtime: Node 22 (pinned in .nvmrc), PostgreSQL
     platforms: [linux, windows, macos]

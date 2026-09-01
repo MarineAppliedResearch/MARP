@@ -16,7 +16,7 @@ These apply to every repository in this workspace.
 
 ## Components
 
-### marp-api — `MARE_API/`
+### marp-api — `MARP_API/`
 
 The MARP API and application backend. Also serves the browser applications from `frontend/apps/`. The video player is no longer among them; it moved to its own repository.
 
@@ -25,7 +25,7 @@ The MARP API and application backend. Also serves the browser applications from 
 - **Config:** `.env` in the repo root, git-ignored. `.env.example` documents every variable.
 
 ```bash
-cd MARE_API
+cd MARP_API
 npm install
 npm run dev                      # nodemon, or press F5 in VS Code
 npm test                         # 22 suites, 142 tests
@@ -104,7 +104,7 @@ and untracked.
 Facts that are easy to miss and expensive to rediscover.
 
 - **The GUI talks to the development API.** `VIDEO_PROCESSING_GUI/MAREGUI_PROOFofCONCEPT/data/API_IP_ADDRESS.txt` holds `http://localhost:3000`. It is a tracked file, changed to the production address when building for production.
-- **Production is a long way behind.** `MARE_API` `master` is over 120 commits behind `develop` and is architecturally older: routes are registered inline in `server.js`, with no `routes/` directory. Anything shipped to production has to be written in that older shape. Tracked as `MARE_API#49`, which also blocks releasing the current GUI to production.
+- **Production is a long way behind.** `MARP_API` `master` is over 120 commits behind `develop` and is architecturally older: routes are registered inline in `server.js`, with no `routes/` directory. Rather than backporting into that older shape, the plan is to promote `develop` wholesale -- so `MARE_API#49`, which tracked a narrow keyframe hotfix, was closed in favour of one release. Ten auth/permissions migrations have never run on production and will apply during it.
 - **Node needs to be on PATH explicitly** in a shell that was started before nvm-windows was installed. The nvm symlink is at `C:/nvm4w/nodejs`; prepend it. In VS Code, fully quitting and reopening fixes it.
 - **Building the GUI from a terminal** needs `msbuild` located through `vswhere`, and output redirected away from the repository. See that repository's own `CLAUDE.md`.
 - **Playwright's browser is installed** on this machine already; a new machine needs `npx playwright install chromium` once.
@@ -112,7 +112,9 @@ Facts that are easy to miss and expensive to rediscover.
 ## Known gaps
 
 - `marp-jellyfin` cannot be built locally (needs .NET 9 SDK). Deferred deliberately; it runs on the VM.
-- `MARE_API` has 58 dependency security advisories on `develop`, untracked.
+- `MARP_API` has 4 moderate dependency advisories left on `develop`, all in the
+  sequelize chain, where npm's suggested fix is a downgrade to sequelize 3. Left
+  deliberately; see `MARP_API#58`.
 - `marp-inference-worker` virtualenv needs recreating against Python 3.12.
 - No cross-component build or test command exists; each component is built on its own.
 - Nothing verifies the GUI still works against a changed API or a changed player.
