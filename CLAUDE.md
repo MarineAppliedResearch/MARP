@@ -14,6 +14,29 @@ These apply to every repository in this workspace.
 - **Never commit `.env` files or credentials.** Each component has a `.env.example` where applicable.
 - Component repositories keep their own `agents.md` / `CLAUDE.md` for specifics. This file holds only what is shared.
 
+### The production database is a scientific record
+
+`mare_v1` in production holds years of annotation that is queried directly and
+reported on, by people and by tools outside this workspace. Treat it as a
+scientific record, not as application storage.
+
+Any transformation of existing data must either **preserve everything currently
+possible**, or transform it so that **nothing is lost** -- a column that stops
+being populated, a value that becomes ambiguous, or a format that an existing
+query no longer parses all count as loss, even when the application still works.
+
+Derived columns are part of the contract. Something outside the application very
+likely reads them.
+
+**Ask about assumptions rather than inferring them from the data.** How a field is
+meant to work, what a value means when it is empty, whether two rows that look
+like duplicates are one thing or two -- these are answerable by the person who
+recorded them and not reliably by inspection. A migration built on a guess about
+meaning is the expensive kind of wrong.
+
+Every data migration carries a before/after integrity check (`db/data-integrity.js`
+in `MARP_API`) and a `down` that restores what it changed.
+
 ## Components
 
 ### marp-api — `MARP_API/`
