@@ -305,34 +305,55 @@ function Invoke-Start {
 
     Write-Step "Starting PostgreSQL on ${DbHost}:$Port"
 
-    # Started through Start-Process rather than the call operator, and this is
-    # not a stylistic choice. PowerShell reads a native command's stdout until
-    # end-of-file; pg_ctl exits promptly, but the postgres server it spawns
-    # inherits the same pipe and holds it open for as long as it runs. So the
-    # call operator waits forever on a command that finished seconds ago, with
-    # a database up and running behind it and nothing on screen to say so.
+    # Starting a server from PowerShell is a nest of ways to wait forever, and
+    # two of them were hit before landing here.
     #
-    # Start-Process gives the child its own handles, so nothing is inherited
-    # and the wait ends when pg_ctl does.
+    # The call operator reads a native command's stdout to end-of-file. pg_ctl
+    # exits in a second, but the postgres server it spawns inherits that pipe
+    # and holds it open for as long as it runs -- so PowerShell blocks on a
+    # command that finished, with a working database behind it.
     #
-    # listen_addresses is localhost only: a development database with a known
-    # password has no business accepting connections from the network.
+    # Start-Process -Wait is worse: it waits for the process *and all its
+    # descendants*, which is precisely the server we intend to leave running.
+    #
+    # So: -W tells pg_ctl not to wait for readiness, Start-Process without
+    # -Wait leaves the tree alone, WaitForExit waits for pg_ctl and nothing
+    # below it, and readiness is then established by asking -- which is the
+    # only claim worth making anyway.
     $startupLog = Join-Path $PostgresDir 'pg_ctl-start.log'
     $previous = $env:PGPASSWORD
     $env:PGPASSWORD = $Password
     try {
         $process = Start-Process -FilePath (Join-Path $BinDir 'pg_ctl.exe') `
             -ArgumentList @('-D', "`"$DataDir`"", '-l', "`"$LogFile`"",
-                            '-o', "`"-p $Port -c listen_addresses=127.0.0.1`"", 'start') `
-            -NoNewWindow -Wait -PassThru `
+                            '-o', "`"-p $Port -c listen_addresses=127.0.0.1`"",
+                            '-W', 'start') `
+            -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput $startupLog -RedirectStandardError "$startupLog.err"
+
+        if (-not $process.WaitForExit(30000)) {
+            try { $process.Kill() } catch { }
+            throw "pg_ctl did not exit within 30s. See $startupLog"
+        }
     } finally {
         $env:PGPASSWORD = $previous
     }
 
+    # Readiness is polled rather than assumed: -W means pg_ctl returns before
+    # the server is accepting connections.
+    $deadline = (Get-Date).AddSeconds(30)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-Running) { break }
+        Start-Sleep -Milliseconds 400
+    }
+
     if (-not (Test-Running)) {
         Write-Warn "pg_ctl exited with $($process.ExitCode)"
-        if (Test-Path -LiteralPath $LogFile) { Get-Content -LiteralPath $LogFile -Tail 5 | ForEach-Object { Write-Warn $_ } }
+        foreach ($log in @($LogFile, $startupLog, "$startupLog.err")) {
+            if (Test-Path -LiteralPath $log) {
+                Get-Content -LiteralPath $log -Tail 4 -ErrorAction SilentlyContinue | ForEach-Object { Write-Warn $_ }
+            }
+        }
         throw "Server did not start. See $LogFile"
     }
     Write-Ok 'running'
