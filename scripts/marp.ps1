@@ -246,6 +246,63 @@ function Get-FirstLine {
     return ($Text -split "`r?`n")[0]
 }
 
+<#
+.SYNOPSIS
+    Print the next thing to do, based on what has actually been done.
+
+.DESCRIPTION
+    A cloned workspace is not a working one, and "Workspace ready" used to be
+    the last thing this script said -- leaving someone with five repositories,
+    no database, and no indication that anything remained. Somebody who has
+    just cloned does not know that marp-api needs its dependencies installed
+    before `db up` can load a schema, or that the API will not start without a
+    session secret.
+
+    So rather than a static list of instructions to read past, this inspects
+    the workspace and prints only what is still outstanding, in the order it
+    has to happen. When everything is done it says so and stops talking.
+#>
+function Show-NextSteps {
+    $apiDir  = Join-Path $RepoRoot 'MARP_API'
+    $steps   = New-Object System.Collections.ArrayList
+
+    if (-not (Test-Path -LiteralPath (Join-Path $apiDir 'package.json'))) {
+        [void]$steps.Add(@('Clone marp-api', '.\scripts\marp.ps1 clone marp-api'))
+    } else {
+        # Before the database, because `db up` loads the schema by running
+        # marp-api's own scripts and cannot without its dependencies.
+        if (-not (Test-Path -LiteralPath (Join-Path $apiDir 'node_modules'))) {
+            [void]$steps.Add(@("Install marp-api's dependencies", 'cd MARP_API; npm install; cd ..'))
+        }
+
+        $clusterReady = Test-Path -LiteralPath (Join-Path $RepoRoot '.postgres\data\PG_VERSION')
+        $listening = $false
+        try { $listening = [bool](Get-NetTCPConnection -State Listen -LocalPort 5432 -ErrorAction Stop) } catch { }
+        if (-not ($clusterReady -and $listening)) {
+            [void]$steps.Add(@('Start a database and load the schema', '.\scripts\marp.ps1 db up'))
+        }
+
+        if (-not (Test-Path -LiteralPath (Join-Path $apiDir '.env'))) {
+            [void]$steps.Add(@("Create marp-api's configuration", 'cd MARP_API; Copy-Item .env.example .env'))
+            [void]$steps.Add(@('Put the DB_* lines from `db up` into MARP_API\.env, and set',
+                               'AUTH_SESSION_SECRET  (any long random string)'))
+        }
+
+        [void]$steps.Add(@('Run the API at http://localhost:3000', 'cd MARP_API; npm run dev'))
+    }
+
+    Write-Host ''
+    Write-Host 'Next:' -ForegroundColor Cyan
+    $number = 1
+    foreach ($step in $steps) {
+        Write-Host ("  {0}. {1}" -f $number, $step[0])
+        Write-Host ("       {0}" -f $step[1]) -ForegroundColor DarkGray
+        $number++
+    }
+    Write-Host ''
+    Write-Host '  Full walkthrough: README.md, "Getting the whole workspace".' -ForegroundColor DarkGray
+}
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -314,7 +371,8 @@ function Invoke-Clone {
 
     if ($script:Failures -eq 0) {
         Write-Host ''
-        Write-Host 'Workspace ready. Open marp.code-workspace, or run: .\scripts\marp.ps1 doctor' -ForegroundColor Green
+        Write-Host 'Every repository is cloned.' -ForegroundColor Green
+        Show-NextSteps
     }
 }
 
@@ -481,6 +539,7 @@ function Invoke-Doctor {
     Write-Host ''
     if ($script:Failures -eq 0) {
         Write-Host 'Workspace looks sound.' -ForegroundColor Green
+        Show-NextSteps
     } else {
         Write-Host "$($script:Failures) problem(s) found." -ForegroundColor Red
     }

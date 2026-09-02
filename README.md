@@ -23,7 +23,17 @@ cd MARP
 sh scripts/marp.sh
 ```
 
-`clone` is the default, so a bare invocation fetches everything. Then get a database, which `marp-api` cannot run without:
+`clone` is the default, so a bare invocation fetches everything.
+
+Next install `marp-api`'s dependencies, **before** asking for a database — `db up` finishes by having `marp-api` load its schema, which it cannot do without them:
+
+```bash
+cd MARP_API
+npm install
+cd ..
+```
+
+Then get the database, which `marp-api` cannot run without:
 
 ```powershell
 .\scripts\marp.ps1 db up
@@ -33,7 +43,22 @@ sh scripts/marp.sh
 sh scripts/marp.sh db up
 ```
 
-That downloads a self-contained PostgreSQL, starts it, and has `marp-api` load its schema — see [The database](#the-database). Finally, put the `DB_*` settings it prints into `MARP_API/.env`, and open `marp.code-workspace` for a multi-root VS Code window over every repository at once.
+That downloads a self-contained PostgreSQL, starts it, and has `marp-api` load its schema — see [The database](#the-database).
+
+Finally, give `marp-api` its configuration and run it:
+
+```bash
+cd MARP_API
+cp .env.example .env      # PowerShell: Copy-Item .env.example .env
+```
+
+Set the `DB_*` lines `db up` printed, plus `AUTH_SESSION_SECRET` to any long random string. The Jellyfin values are only needed for routes that resolve media; the API starts without them.
+
+```bash
+npm run dev               # http://localhost:3000
+```
+
+`marp` and `marp doctor` both end by printing whichever of these steps is still outstanding, so you do not have to keep this page open. `marp.code-workspace` opens a multi-root VS Code window over every repository at once.
 
 `clone` skips anything already present and never writes into a directory it did not create, so it is safe to re-run. `VIDEO_PROCESSING_GUI` is private and needs credentials; the rest are public. Add `--group components` (`-Group components` in PowerShell) to skip the related repositories, or `--protocol ssh` to clone over SSH.
 

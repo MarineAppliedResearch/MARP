@@ -217,6 +217,52 @@ remote_slug() {
         -e 's#^/*##' -e 's#/*$##'
 }
 
+# Print the next thing to do, based on what has actually been done.
+#
+# A cloned workspace is not a working one, and "Workspace ready" used to be the
+# last thing this script said -- leaving someone with five repositories, no
+# database, and no indication anything remained. Somebody who has just cloned
+# does not know that marp-api needs its dependencies installed before `db up`
+# can load a schema, or that the API will not start without a session secret.
+#
+# So rather than a static list to read past, this inspects the workspace and
+# prints only what is outstanding, in the order it has to happen.
+show_next_steps() {
+    api="$REPO_ROOT/MARP_API"
+    n=0
+    printf '\n%sNext:%s\n' "$C_CYN" "$C_OFF"
+
+    step_line() {
+        n=$((n + 1))
+        printf '  %d. %s\n' "$n" "$1"
+        printf '%s       %s%s\n' "$C_DIM" "$2" "$C_OFF"
+    }
+
+    if [ ! -f "$api/package.json" ]; then
+        step_line 'Clone marp-api' 'sh scripts/marp.sh clone marp-api'
+    else
+        # Before the database, because `db up` loads the schema by running
+        # marp-api's own scripts and cannot without its dependencies.
+        if [ ! -d "$api/node_modules" ]; then
+            step_line "Install marp-api's dependencies" 'cd MARP_API && npm install && cd ..'
+        fi
+
+        if [ ! -f "$REPO_ROOT/.postgres/data/PG_VERSION" ]; then
+            step_line 'Start a database and load the schema' 'sh scripts/marp.sh db up'
+        fi
+
+        if [ ! -f "$api/.env" ]; then
+            step_line "Create marp-api's configuration" 'cd MARP_API && cp .env.example .env'
+            step_line 'Put the DB_* lines from `db up` into MARP_API/.env, and set' \
+                      'AUTH_SESSION_SECRET  (any long random string)'
+        fi
+
+        step_line 'Run the API at http://localhost:3000' 'cd MARP_API && npm run dev'
+    fi
+
+    printf "\n%s  Full walkthrough: README.md, \"Getting the whole workspace\"%s\n" "$C_DIM" "$C_OFF"
+}
+
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -273,7 +319,8 @@ cmd_clone() {
     done
 
     if [ "$(failure_count)" -eq 0 ]; then
-        printf '\n%sWorkspace ready. Open marp.code-workspace, or run: scripts/marp.sh doctor%s\n' "$C_GRN" "$C_OFF"
+        printf '\n%sEvery repository is cloned.%s\n' "$C_GRN" "$C_OFF"
+        show_next_steps
     fi
 }
 
@@ -416,6 +463,7 @@ cmd_doctor() {
     printf '\n'
     if [ "$(failure_count)" -eq 0 ]; then
         printf '%sWorkspace looks sound.%s\n' "$C_GRN" "$C_OFF"
+        show_next_steps
     else
         printf '%s%s problem(s) found.%s\n' "$C_RED" "$(failure_count)" "$C_OFF"
     fi
