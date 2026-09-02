@@ -13,7 +13,13 @@
 # Fields:
 #   repository      - GitHub repository, or null if it does not exist yet
 #   directory       - clone location relative to this umbrella repository root
-#   default_branch  - the branch a fresh clone lands on
+#   default_branch  - the branch a fresh clone should land on. NOT necessarily
+#                     GitHub's default branch: marp-api's default is master,
+#                     which is roughly a year and 147 commits behind the branch
+#                     work actually happens on. Cloning GitHub's default gave a
+#                     workspace nobody develops against, missing files the
+#                     umbrella's own scripts depend on. This field records the
+#                     branch to develop on, and the two differ.
 #   visibility      - public | private. Private repositories need credentials
 #                     before scripts/marp can clone them.
 #   role            - what it does
@@ -39,7 +45,7 @@ components:
   marp-api:
     repository: MarineAppliedResearch/MARP_API
     directory: MARP_API
-    default_branch: master
+    default_branch: develop
     visibility: public
     role: MARP API and application backend
     runtime: Node 22 (pinned in .nvmrc), PostgreSQL
@@ -55,6 +61,12 @@ components:
       Renamed from MARE_API. GitHub still redirects the old name, so a stale
       reference appears to work and will stop working the moment anyone
       creates a new repository called MARE_API. Always use MARP_API.
+
+      Cloned at develop, not at GitHub's default of master. master is around a
+      year and 147 commits behind, has no routes/ directory, and carries
+      neither db/baseline/ nor scripts/init-database.js -- so a workspace
+      cloned at master cannot even set up its own database. The plan is to
+      promote develop wholesale rather than backport into that older shape.
 
   marp-video-server:
     repository: MarineAppliedResearch/marp-jellyfin
