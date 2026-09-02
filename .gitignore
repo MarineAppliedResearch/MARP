@@ -21,6 +21,12 @@
 # --- Former directory names, kept so a part-migrated checkout stays safe ---
 /MARE_API/
 
+# --- The local PostgreSQL, fetched on demand by `marp db up` ---
+# The server binaries are around 920 MB unpacked and the cluster holds a real
+# database. Neither belongs in Git: both are reproducible from the registry and
+# marp-api's baseline, and `marp db destroy` throws them away.
+/.postgres/
+
 # --- Local workspace state ---
 .vscode/settings.json
 *.local

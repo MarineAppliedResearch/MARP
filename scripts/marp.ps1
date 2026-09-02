@@ -17,16 +17,28 @@
 
     Commands:
 
+      clone     Clone whatever is missing. Never touches what is already
+                there. The default, because it is what this script is for.
       list      What the registry declares, and whether it is present here.
-      clone     Clone whatever is missing. Never touches what is already there.
       status    Branch, uncommitted changes and drift from upstream, per repo.
       pull      Fast-forward every clean repository. Skips dirty ones.
       doctor    Check the workspace is sound, and in particular that the
                 umbrella cannot absorb a component.
+      db        Provision and run the PostgreSQL database that marp-api needs.
+                Delegates to scripts/db.ps1 -- see `marp db` subcommands
+                up, down, status, env and destroy.
 
 .PARAMETER Command
-    One of list, clone, status, pull, doctor. Defaults to list, because it is
-    the only one that cannot surprise you.
+    One of clone, list, status, pull, doctor, db. Defaults to clone: it is the
+    reason this script exists, and it is safe to repeat -- it skips whatever is
+    already present and refuses to write into a directory it did not create.
+
+.PARAMETER Component
+    A single repository to act on, by registry name (marp-api) or by directory
+    (MARP_API), case-insensitively. Both spellings are accepted because both
+    are what people have in front of them. Omit it to act on everything.
+
+    When Command is `db`, this is the database subcommand instead.
 
 .PARAMETER Group
     Restrict to components (part of a MARP deployment) or related (developed
@@ -37,12 +49,24 @@
     ssh needs a key on the account. Only affects new clones.
 
 .EXAMPLE
-    .\scripts\marp.ps1 clone
+    .\scripts\marp.ps1
     Clone every registered repository that is not already present.
+
+.EXAMPLE
+    .\scripts\marp.ps1 clone marp-api
+    Clone just that one.
+
+.EXAMPLE
+    .\scripts\marp.ps1 status marp-video-player
+    Report on one repository rather than all of them.
 
 .EXAMPLE
     .\scripts\marp.ps1 clone -Group components -Protocol ssh
     Clone only the deployment components, over SSH.
+
+.EXAMPLE
+    .\scripts\marp.ps1 db up
+    Download, start and populate the PostgreSQL database marp-api needs.
 
 .NOTES
     Author: Isaac Travers
@@ -53,14 +77,23 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('list', 'clone', 'status', 'pull', 'doctor')]
-    [string]$Command = 'list',
+    [ValidateSet('clone', 'list', 'status', 'pull', 'doctor', 'db')]
+    [string]$Command = 'clone',
+
+    # For most commands this narrows the work to one repository. For `db` it is
+    # the database subcommand -- up, down, status, env, destroy.
+    [Parameter(Position = 1)]
+    [string]$Component,
 
     [ValidateSet('all', 'components', 'related')]
     [string]$Group = 'all',
 
     [ValidateSet('https', 'ssh')]
-    [string]$Protocol = 'https'
+    [string]$Protocol = 'https',
+
+    # Passed through to scripts/db.ps1 by the `db` command.
+    [int]$Port = 5432,
+    [string]$Password = 'marp_dev_password'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -134,8 +167,23 @@ function Read-Registry {
     }
 
     if ($Group -ne 'all') {
-        return @($entries | Where-Object { $_.group -eq $Group })
+        $entries = @($entries | Where-Object { $_.group -eq $Group })
     }
+
+    # A single repository, named either way round. People have the directory in
+    # front of them in a file explorer and the registry name in front of them
+    # in repos.yml, so both are accepted rather than making them look it up.
+    if ($Component) {
+        $wanted = @($entries | Where-Object {
+            $_.name -eq $Component -or $_.directory -eq $Component
+        })
+        if ($wanted.Count -eq 0) {
+            $known = ($entries | ForEach-Object { $_.name }) -join ', '
+            throw "No repository called '$Component'. Known: $known"
+        }
+        return $wanted
+    }
+
     return @($entries)
 }
 
@@ -440,11 +488,27 @@ function Invoke-Doctor {
 
 # ---------------------------------------------------------------------------
 
+# The database is its own script: it is long, it is about PostgreSQL rather
+# than about repositories, and keeping it separate means neither file has to be
+# read to understand the other. `marp db <subcommand>` is the only entry point.
+if ($Command -eq 'db') {
+    $dbScript = Join-Path $PSScriptRoot 'db.ps1'
+    if (-not (Test-Path -LiteralPath $dbScript)) { throw "Missing $dbScript" }
+
+    $arguments = @{}
+    if ($Component) { $arguments['Command'] = $Component }
+    if ($PSBoundParameters.ContainsKey('Port')) { $arguments['Port'] = $Port }
+    if ($PSBoundParameters.ContainsKey('Password')) { $arguments['Password'] = $Password }
+
+    & $dbScript @arguments
+    exit $LASTEXITCODE
+}
+
 $entries = Read-Registry
 
 switch ($Command) {
-    'list'   { Invoke-List   $entries }
     'clone'  { Invoke-Clone  $entries }
+    'list'   { Invoke-List   $entries }
     'status' { Invoke-Status $entries }
     'pull'   { Invoke-Pull   $entries }
     'doctor' { Invoke-Doctor $entries }

@@ -26,7 +26,7 @@ set -eu
 
 usage() {
     cat <<'USAGE'
-Usage: scripts/marp.sh [command] [options]
+Usage: scripts/marp.sh [command] [component] [options]
 
 Commands:
   list      What the registry declares, and whether it is present here (default).
@@ -62,17 +62,34 @@ REGISTRY="$REPO_ROOT/services/repos.yml"
 # repository.
 LEGACY_DIRECTORIES='MARE_API:MARP_API'
 
-COMMAND=list
+COMMAND=clone
+COMPONENT=
 GROUP=all
 PROTOCOL=https
+COMMAND_SEEN=0
+
+# The database is its own script: long, about PostgreSQL rather than about
+# repositories, and keeping it separate means neither file has to be read to
+# understand the other. Its arguments are its own, so they are handed over
+# untouched rather than parsed here.
+if [ "${1:-}" = db ]; then
+    shift
+    exec "$SCRIPT_DIR/db.sh" "$@"
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        list|clone|status|pull|doctor) COMMAND=$1 ;;
+        clone|list|status|pull|doctor)
+            if [ "$COMMAND_SEEN" -eq 0 ]; then COMMAND=$1; COMMAND_SEEN=1
+            else COMPONENT=$1; fi
+            ;;
         --group) GROUP=${2:?--group needs a value}; shift ;;
         --protocol) PROTOCOL=${2:?--protocol needs a value}; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) printf 'Unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+        -*) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+        # Anything else is a component name. Validated against the registry
+        # rather than here, so the error can list what is actually available.
+        *) COMPONENT=$1; COMMAND_SEEN=1 ;;
     esac
     shift
 done
@@ -153,7 +170,28 @@ read_registry() {
         END { emit() }
     ' "$REGISTRY" | {
         if [ "$GROUP" = all ]; then cat; else grep "^$GROUP|" || true; fi
+    } | {
+        if [ -z "$COMPONENT" ]; then
+            cat
+        else
+            # Field 2 is the registry name, field 4 the directory. Matched
+            # case-insensitively: people type what they see, and the registry
+            # says marp-api where the disk says MARP_API.
+            awk -F'|' -v want="$(printf '%s' "$COMPONENT" | tr 'A-Z' 'a-z')" '
+                tolower($2) == want || tolower($4) == want
+            '
+        fi
     }
+}
+
+# Fails with the available names rather than doing nothing, which is what an
+# unmatched filter would otherwise look like.
+require_component_matched() {
+    [ -n "$COMPONENT" ] || return 0
+    [ -z "$(read_registry)" ] || return 0
+    known=$(COMPONENT= read_registry | awk -F'|' '{printf "%s%s", sep, $2; sep=", "}')
+    echo "No repository called '$COMPONENT'. Known: $known" >&2
+    exit 2
 }
 
 # The registry allows `repository: null` for a component that is planned but
@@ -383,9 +421,11 @@ cmd_doctor() {
     fi
 }
 
+require_component_matched
+
 case "$COMMAND" in
-    list)   cmd_list ;;
     clone)  cmd_clone ;;
+    list)   cmd_list ;;
     status) cmd_status ;;
     pull)   cmd_pull ;;
     doctor) cmd_doctor ;;

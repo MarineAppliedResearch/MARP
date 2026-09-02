@@ -7,13 +7,41 @@ This is the workspace root for the MARP ecosystem. Each subdirectory listed belo
 ## Getting the workspace
 
 `scripts/marp.ps1` (Windows) and `scripts/marp.sh` (POSIX) read the registry and
-manage every component repository. `clone` fetches what is missing, `status` and
-`pull` work across all of them, and `doctor` checks the workspace is sound --
+manage every component repository. `clone` is the default, `status` and `pull`
+work across all of them, and `doctor` checks the workspace is sound --
 including that every component directory is ignored here, so a commit in the
 umbrella can never absorb one. `doctor` exits non-zero on failure.
 
+Any command takes one repository, by registry name (`marp-api`) or by directory
+(`MARP_API`).
+
 Adding a component means editing `services/repos.yml` and `.gitignore`, not
 editing the scripts. `doctor` fails when those two disagree.
+
+## The database
+
+`marp db up` (scripts/db.ps1, scripts/db.sh) downloads a self-contained
+PostgreSQL 18.6 into `.postgres/`, starts it on 127.0.0.1:5432 and has marp-api
+load its schema. No installer, no administrator rights, no VM, no container.
+`marp db destroy` throws the database away; `.postgres/` is git-ignored.
+
+Two boundaries worth not blurring:
+
+- **The schema belongs to marp-api**, which holds the baseline and the
+  migrations. `db up` runs marp-api's own `scripts/init-database.js` and
+  `db:migrate` rather than keeping a second copy of the schema here, which
+  would drift the first time somebody adds a migration.
+- **marp-api never learns where its database came from.** It reads five `DB_*`
+  variables, as it always has. `db up` is one way to produce a PostgreSQL that
+  satisfies them, with no more standing than the VM or a remote server, and it
+  need never be run.
+
+On Linux it uses the installed PostgreSQL instead of downloading: the project
+publishes no portable Linux build. `.env` is printed, never written -- that
+file also holds Jellyfin credentials and a session secret.
+
+Node not being on `PATH` is a routine state here, not a broken machine, so the
+script names it rather than blaming the migration script for it.
 
 ## Conventions
 
@@ -62,7 +90,7 @@ The MARP API and application backend. Also serves the browser applications from 
 cd MARP_API
 npm install
 npm run dev                      # nodemon, or press F5 in VS Code
-npm test                         # 22 suites, 142 tests
+npm test                         # 29 suites, 227 tests
 npx sequelize-cli db:migrate:status
 ```
 
