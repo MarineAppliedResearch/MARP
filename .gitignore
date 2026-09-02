@@ -3,20 +3,23 @@
 # This repository is the workspace root for the MARP ecosystem. Each component
 # is cloned as a subdirectory here but remains its own independent Git
 # repository, so every component directory must stay ignored. Without this, the
-# umbrella would try to absorb them as untracked files, including roughly 93 MB
-# of marp-jellyfin.
+# umbrella would try to absorb them, including roughly 93 MB of marp-jellyfin,
+# and a commit here would carry a component's files or a stray gitlink with it.
 #
-# Keep this list in sync with services/repos.yml when a component is added.
+# Keep this list in sync with services/repos.yml. `scripts/marp doctor` checks
+# that they agree and fails if a registered directory is not ignored here.
 
 # --- Component repositories (each is its own Git repository) ---
-/MARE_API/
+/MARP_API/
 /marp-jellyfin/
 /marp-inference-worker/
+/marp-video-player/
+
+# --- Related repositories (in the workspace, not part of a deployment) ---
 /VIDEO_PROCESSING_GUI/
 
-# --- More component repositories ---
-
-/marp-video-player/
+# --- Former directory names, kept so a part-migrated checkout stays safe ---
+/MARE_API/
 
 # --- Local workspace state ---
 .vscode/settings.json
