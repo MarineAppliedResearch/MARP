@@ -6,75 +6,82 @@ This is the workspace root for the MARP ecosystem. Each subdirectory listed belo
 
 ## Getting the workspace
 
-`scripts/marp.ps1` (Windows) and `scripts/marp.sh` (POSIX) read the registry and
-manage every component repository. `clone` is the default, `status` and `pull`
-work across all of them, and `doctor` checks the workspace is sound --
-including that every component directory is ignored here, so a commit in the
-umbrella can never absorb one. `doctor` exits non-zero on failure.
+`scripts/marp.ps1 setup` takes a bare clone of this repository to a running
+database with a login: clones every component, installs marp-api's
+dependencies, writes its `.env`, builds the database, sets the first
+administrator's password, and writes the annotation GUI's application token.
+Idempotent, so re-running after a failure is the fix.
 
-Any command takes one repository, by registry name (`marp-api`) or by directory
-(`MARP_API`).
+`scripts/marp.sh` is the POSIX counterpart for everything except `setup`.
+
+`clone` is the default command. Any command takes one repository, by registry
+name (`marp-api`) or directory (`MARP_API`).
+
+Four orderings in `setup` are load-bearing, and each was a bug first:
+
+- **npm install before the database.** The database step ends by having
+  marp-api load its schema, which needs its dependencies.
+- **`.env` before the database.** The bootstrap migration names the first
+  administrator from `BOOTSTRAP_ADMIN_NAME` in `.env`. Writing `.env`
+  afterwards meant the migration had already defaulted the name.
+- **The admin password after the migrations.** The account does not exist
+  until they run.
+- **The token last.** It needs the permission catalog the migrations seed.
 
 Adding a component means editing `services/repos.yml` and `.gitignore`, not
-editing the scripts. `doctor` fails when those two disagree.
+the scripts. `doctor` fails when those two disagree.
+
+### Which branch gets cloned
+
+`default_branch` in the registry is the branch to **develop on**, not GitHub's
+default. They differ: marp-api's GitHub default is `master`, a year and 147
+commits behind, with no `routes/` and no `db/baseline/` -- a workspace cloned
+from it cannot build its own database, which is exactly what happened.
+
+`develop` for marp-api, marp-inference-worker and video-processing-gui.
+marp-video-player and marp-jellyfin have no develop branch and stay on master.
 
 ## The database
 
-`marp db up` (scripts/db.ps1, scripts/db.sh) downloads a self-contained
-PostgreSQL 18.6 into `.postgres/`, starts it on 127.0.0.1:5432 and has marp-api
-load its schema. No installer, no administrator rights, no VM, no container.
-`marp db destroy` throws the database away; `.postgres/` is git-ignored.
+`marp db up` downloads a self-contained PostgreSQL 18.6 into `.postgres/`,
+starts it on 127.0.0.1:5432 and has marp-api load its schema. No installer, no
+administrator rights, no VM, no container. `marp db destroy` throws the
+database away but keeps the download; `.postgres/` is git-ignored.
+
+Because PostgreSQL lives inside the workspace, the workspace cannot be deleted
+while it is running. `marp db down` first.
 
 Two boundaries worth not blurring:
 
 - **The schema belongs to marp-api**, which holds the baseline and the
   migrations. `db up` runs marp-api's own `scripts/init-database.js` and
-  `db:migrate` rather than keeping a second copy of the schema here, which
-  would drift the first time somebody adds a migration.
+  `db:migrate` rather than keeping a second copy here, which would drift the
+  first time somebody adds a migration.
 - **marp-api never learns where its database came from.** It reads five `DB_*`
   variables, as it always has. `db up` is one way to produce a PostgreSQL that
-  satisfies them, with no more standing than the VM or a remote server, and it
-  need never be run.
+  satisfies them, with no more standing than the VM or a remote server.
 
 On Linux it uses the installed PostgreSQL instead of downloading: the project
-publishes no portable Linux build. `.env` is printed, never written -- that
-file also holds Jellyfin credentials and a session secret.
+publishes no portable Linux build.
 
-Node not being on `PATH` is a routine state here, not a broken machine, so the
-script names it rather than blaming the migration script for it.
+### PowerShell traps this script kept falling into
 
-## Conventions
+All four cost real time, and all four are silent:
 
-These apply to every repository in this workspace.
-
-- **Commit authorship is the human developer only.** Never add Claude as author or co-author, and never add a `Co-Authored-By` trailer. This applies to merge and squash commits too.
-- **Keep commit messages short.** A subject line under ~72 characters plus a few one-line bullets. Reference the issue with `Refs #NN`.
-- **Issues live where the code changes.** Cross-repo work gets a tracking issue in the `MARP` repo, referencing component issues as `MarineAppliedResearch/<repo>#<n>`.
-- **Never commit `.env` files or credentials.** Each component has a `.env.example` where applicable.
-- Component repositories keep their own `agents.md` / `CLAUDE.md` for specifics. This file holds only what is shared.
-
-### The production database is a scientific record
-
-`mare_v1` in production holds years of annotation that is queried directly and
-reported on, by people and by tools outside this workspace. Treat it as a
-scientific record, not as application storage.
-
-Any transformation of existing data must either **preserve everything currently
-possible**, or transform it so that **nothing is lost** -- a column that stops
-being populated, a value that becomes ambiguous, or a format that an existing
-query no longer parses all count as loss, even when the application still works.
-
-Derived columns are part of the contract. Something outside the application very
-likely reads them.
-
-**Ask about assumptions rather than inferring them from the data.** How a field is
-meant to work, what a value means when it is empty, whether two rows that look
-like duplicates are one thing or two -- these are answerable by the person who
-recorded them and not reliably by inspection. A migration built on a guess about
-meaning is the expensive kind of wrong.
-
-Every data migration carries a before/after integrity check (`db/data-integrity.js`
-in `MARP_API`) and a `down` that restores what it changed.
+- **`&` on a native command blocks until stdout reaches EOF.** `pg_ctl` exits
+  at once but the server it spawns inherits the pipe, so starting the database
+  never returned. Started via `Start-Process` now -- and *not* with `-Wait`,
+  which waits for the whole process tree including the server.
+- **stderr is fatal under `ErrorActionPreference = 'Stop'`.** An `npm notice`
+  aborted setup; a `psql` notice killed `db status`. Native calls go through
+  `Invoke-Native`, which relaxes the preference and believes the exit code.
+- **A function returns everything it emits.** Returning an exit code alongside
+  a command's output gives the caller an array, and `-ne 0` filters rather than
+  compares -- so a failed step reported success. Exit codes go in
+  `$script:LastNativeExit`; output goes to `Out-Host`.
+- **Embedded quotes are not escaped for native arguments.**
+  `"SequelizeMeta"` reached psql unquoted, was folded to lower case, and
+  failed against a healthy database.
 
 ## Components
 
