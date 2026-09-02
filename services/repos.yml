@@ -11,15 +11,25 @@
 # Every field is verified against the actual repositories, not aspirational.
 #
 # Fields:
-#   repository  - GitHub repository, or null if it does not exist yet
-#   directory   - clone location relative to this umbrella repository root
-#   role        - what it does
-#   runtime     - what must be installed to build or run it
-#   platforms   - operating systems it can run on
-#   status      - active | undecided
-#   notes       - anything a developer or installer needs to know
+#   repository      - GitHub repository, or null if it does not exist yet
+#   directory       - clone location relative to this umbrella repository root
+#   default_branch  - the branch a fresh clone lands on
+#   visibility      - public | private. Private repositories need credentials
+#                     before scripts/marp can clone them.
+#   role            - what it does
+#   runtime         - what must be installed to build or run it
+#   platforms       - operating systems it can run on
+#   status          - active | undecided
+#   notes           - anything a developer or installer needs to know
 #
 # Keep the /directory entries in sync with the umbrella .gitignore.
+#
+# THIS FILE IS READ BY SCRIPTS. `scripts/marp.ps1` and `scripts/marp.sh` parse
+# it without a YAML library, so the shape is constrained rather than free:
+# group keys at column 0, one repository key indented two spaces, and its
+# fields indented four. Folded values (`notes: >`) may run on at six spaces or
+# more. `scripts/marp doctor` fails if a registry entry cannot be read, which
+# is the check that this stays true.
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +39,8 @@ components:
   marp-api:
     repository: MarineAppliedResearch/MARP_API
     directory: MARP_API
+    default_branch: master
+    visibility: public
     role: MARP API and application backend
     runtime: Node 22 (pinned in .nvmrc), PostgreSQL
     platforms: [linux, windows, macos]
@@ -40,9 +52,15 @@ components:
       possible future change, not current scope. With PostgreSQL, this is the
       smallest useful MARP install.
 
+      Renamed from MARE_API. GitHub still redirects the old name, so a stale
+      reference appears to work and will stop working the moment anyone
+      creates a new repository called MARE_API. Always use MARP_API.
+
   marp-video-server:
     repository: MarineAppliedResearch/marp-jellyfin
     directory: marp-jellyfin
+    default_branch: master
+    visibility: public
     role: Video service backend, forked from Jellyfin
     runtime: .NET SDK (pinned in global.json)
     platforms: [linux, windows, macos]
@@ -56,6 +74,8 @@ components:
   marp-inference-worker:
     repository: MarineAppliedResearch/marp-inference-worker
     directory: marp-inference-worker
+    default_branch: master
+    visibility: public
     role: Machine-learning inference service
     runtime: Python >= 3.10, ultralytics, NVIDIA GPU
     platforms: [linux, windows]
@@ -68,6 +88,8 @@ components:
   marp-video-player:
     repository: MarineAppliedResearch/marp-video-player
     directory: marp-video-player
+    default_branch: master
+    visibility: public
     role: Reusable JavaScript/WebCodecs video player
     runtime: Node 20+
     platforms: [linux, windows, macos]
@@ -90,6 +112,8 @@ related:
   video-processing-gui:
     repository: MarineAppliedResearch/VIDEO_PROCESSING_GUI
     directory: VIDEO_PROCESSING_GUI
+    default_branch: develop
+    visibility: private
     role: Desktop annotation and review client
     runtime: .NET Framework 4.7.2, WPF
     platforms: [windows]
@@ -103,3 +127,6 @@ related:
       Windows-only and permanently so: .NET Framework 4.7.2 predates .NET
       Core, so it cannot run on Linux or in a container. Any cross-platform
       tooling must skip it rather than try to accommodate it.
+
+      The only private repository in the registry, so cloning it needs
+      credentials that the public components do not.

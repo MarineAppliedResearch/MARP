@@ -1,0 +1,15 @@
+# Line endings for the umbrella repository.
+#
+# Windows is the primary development platform here, so Git's autocrlf would
+# happily check out every file with CRLF. For a shell script that is not a
+# cosmetic difference: a CRLF shebang line makes the kernel look for an
+# interpreter named "/bin/sh\r", and the script fails to run at all on Linux
+# and macOS. scripts/marp.sh has to survive a checkout on those platforms, so
+# its line endings are pinned rather than left to configuration.
+
+* text=auto
+
+*.sh text eol=lf
+*.ps1 text eol=crlf
+*.yml text eol=lf
+*.md text eol=lf

@@ -4,6 +4,17 @@ This is the workspace root for the MARP ecosystem. Each subdirectory listed belo
 
 `services/repos.yml` is the canonical registry. This file is the operational companion: how to build, run, and test each part, and what currently does not work.
 
+## Getting the workspace
+
+`scripts/marp.ps1` (Windows) and `scripts/marp.sh` (POSIX) read the registry and
+manage every component repository. `clone` fetches what is missing, `status` and
+`pull` work across all of them, and `doctor` checks the workspace is sound --
+including that every component directory is ignored here, so a commit in the
+umbrella can never absorb one. `doctor` exits non-zero on failure.
+
+Adding a component means editing `services/repos.yml` and `.gitignore`, not
+editing the scripts. `doctor` fails when those two disagree.
+
 ## Conventions
 
 These apply to every repository in this workspace.
@@ -127,7 +138,7 @@ and untracked.
 Facts that are easy to miss and expensive to rediscover.
 
 - **The GUI talks to the development API.** `VIDEO_PROCESSING_GUI/MAREGUI_PROOFofCONCEPT/data/API_IP_ADDRESS.txt` holds `http://localhost:3000`. It is a tracked file, changed to the production address when building for production.
-- **Production is a long way behind.** `MARP_API` `master` is over 120 commits behind `develop` and is architecturally older: routes are registered inline in `server.js`, with no `routes/` directory. Rather than backporting into that older shape, the plan is to promote `develop` wholesale -- so `MARE_API#49`, which tracked a narrow keyframe hotfix, was closed in favour of one release. Ten auth/permissions migrations have never run on production and will apply during it.
+- **Production is a long way behind.** `MARP_API` `master` is over 120 commits behind `develop` and is architecturally older: routes are registered inline in `server.js`, with no `routes/` directory. Rather than backporting into that older shape, the plan is to promote `develop` wholesale -- so `MARP_API#49`, which tracked a narrow keyframe hotfix, was closed in favour of one release. Ten auth/permissions migrations have never run on production and will apply during it.
 - **Node needs to be on PATH explicitly** in a shell that was started before nvm-windows was installed. The nvm symlink is at `C:/nvm4w/nodejs`; prepend it. In VS Code, fully quitting and reopening fixes it.
 - **Building the GUI from a terminal** needs `msbuild` located through `vswhere`, and output redirected away from the repository. See that repository's own `CLAUDE.md`.
 - **Playwright's browser is installed** on this machine already; a new machine needs `npx playwright install chromium` once.
@@ -141,3 +152,6 @@ Facts that are easy to miss and expensive to rediscover.
 - `marp-inference-worker` virtualenv needs recreating against Python 3.12.
 - No cross-component build or test command exists; each component is built on its own.
 - Nothing verifies the GUI still works against a changed API or a changed player.
+- The API repository was renamed `MARE_API` -> `MARP_API`. GitHub redirects the
+  old name, so a stale reference works until somebody creates a new repository
+  called `MARE_API`. Always write `MARP_API`.
