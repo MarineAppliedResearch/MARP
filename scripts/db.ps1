@@ -89,6 +89,46 @@ function Write-Step { param([string]$Message) Write-Host "==> $Message" -Foregro
 function Write-Ok   { param([string]$Message) Write-Host "    $Message" -ForegroundColor DarkGray }
 function Write-Warn { param([string]$Message) Write-Host "    $Message" -ForegroundColor Yellow }
 
+<#
+.SYNOPSIS
+    Run an external command without its stderr becoming a fatal error.
+
+.DESCRIPTION
+    Windows PowerShell with $ErrorActionPreference = 'Stop' turns anything a
+    native executable writes to stderr into a terminating error, regardless of
+    its exit code. npm writes ordinary notices there, so `npx sequelize-cli
+    db:migrate` aborted this script the moment npm mentioned a new version was
+    available -- a failure with no failure in it, and an intermittent one,
+    since it depended on whether npm felt talkative.
+
+    So the preference is relaxed for the duration of the call and the exit code
+    is what gets believed, which is the only thing that actually reports
+    success.
+
+    The exit code is left in $script:LastNativeExit rather than returned. A
+    function that returns it would hand the caller the command's entire stdout
+    with the code appended -- an array, on which `-ne 0` filters instead of
+    comparing, so every check would pass or fail for the wrong reason.
+
+.OUTPUTS
+    None. The command's own output goes straight to the host.
+#>
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [string[]]$Arguments = @()
+    )
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Command @Arguments
+        $script:LastNativeExit = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
 function Test-Fetched     { Test-Path -LiteralPath (Join-Path $BinDir 'postgres.exe') }
 function Test-Initialised { Test-Path -LiteralPath (Join-Path $DataDir 'PG_VERSION') }
 
@@ -264,12 +304,37 @@ function Invoke-Start {
     }
 
     Write-Step "Starting PostgreSQL on ${DbHost}:$Port"
-    # listen_addresses is localhost only: a development database with a
-    # known password has no business accepting connections from the network.
-    Invoke-Pg pg_ctl @('-D', $DataDir, '-l', $LogFile,
-                       '-o', "-p $Port -c listen_addresses=127.0.0.1", 'start') | Out-Null
 
-    if (-not (Test-Running)) { throw "Server did not start. See $LogFile" }
+    # Started through Start-Process rather than the call operator, and this is
+    # not a stylistic choice. PowerShell reads a native command's stdout until
+    # end-of-file; pg_ctl exits promptly, but the postgres server it spawns
+    # inherits the same pipe and holds it open for as long as it runs. So the
+    # call operator waits forever on a command that finished seconds ago, with
+    # a database up and running behind it and nothing on screen to say so.
+    #
+    # Start-Process gives the child its own handles, so nothing is inherited
+    # and the wait ends when pg_ctl does.
+    #
+    # listen_addresses is localhost only: a development database with a known
+    # password has no business accepting connections from the network.
+    $startupLog = Join-Path $PostgresDir 'pg_ctl-start.log'
+    $previous = $env:PGPASSWORD
+    $env:PGPASSWORD = $Password
+    try {
+        $process = Start-Process -FilePath (Join-Path $BinDir 'pg_ctl.exe') `
+            -ArgumentList @('-D', "`"$DataDir`"", '-l', "`"$LogFile`"",
+                            '-o', "`"-p $Port -c listen_addresses=127.0.0.1`"", 'start') `
+            -NoNewWindow -Wait -PassThru `
+            -RedirectStandardOutput $startupLog -RedirectStandardError "$startupLog.err"
+    } finally {
+        $env:PGPASSWORD = $previous
+    }
+
+    if (-not (Test-Running)) {
+        Write-Warn "pg_ctl exited with $($process.ExitCode)"
+        if (Test-Path -LiteralPath $LogFile) { Get-Content -LiteralPath $LogFile -Tail 5 | ForEach-Object { Write-Warn $_ } }
+        throw "Server did not start. See $LogFile"
+    }
     Write-Ok 'running'
 }
 
@@ -280,6 +345,21 @@ function Invoke-Stop {
     Write-Step 'Stopping PostgreSQL'
     Invoke-Pg pg_ctl @('-D', $DataDir, '-m', 'fast', 'stop') | Out-Null
     Write-Ok 'stopped'
+}
+
+<#
+.SYNOPSIS
+    Record whether the database is empty, before anything touches it.
+
+.DESCRIPTION
+    Read once, up front, because it decides whether the baseline applies and
+    the answer changes the moment it is used.
+#>
+function Test-DatabaseEmpty {
+    $tables = (Invoke-Pg psql @('-h', $DbHost, '-p', "$Port", '-U', $Role, '-d', $Database,
+                                '-tAc', "select count(*) from information_schema.tables where table_schema = 'public'") 2>$null) -join ''
+    if ($LASTEXITCODE -ne 0 -or -not $tables) { return $true }
+    return ([int]$tables -eq 0)
 }
 
 function New-MarpDatabase {
@@ -350,13 +430,27 @@ function Invoke-LoadSchema {
     try {
         Set-Location -LiteralPath $ApiDir
 
-        Write-Step 'Loading the baseline schema (MARP_API)'
-        & node 'scripts/init-database.js'
-        if ($LASTEXITCODE -ne 0) { Write-Warn 'init-database.js did not succeed'; return $false }
+        # The baseline is only for an empty database -- init-database.js
+        # refuses a populated one, and rightly so. On a second `up` that
+        # refusal is the correct answer, not a failure, so the emptiness is
+        # checked here rather than inferred from an exit code. Migrating,
+        # by contrast, is always right: it is a no-op when there is nothing
+        # pending.
+        if ($script:DatabaseIsEmpty) {
+            Write-Step 'Loading the baseline schema (MARP_API)'
+            Invoke-Native 'node' @('scripts/init-database.js')
+            if ($script:LastNativeExit -ne 0) {
+                Write-Warn 'init-database.js did not succeed'; return $false
+            }
+        } else {
+            Write-Ok 'schema already present, so the baseline was not reapplied'
+        }
 
         Write-Step 'Applying migrations (MARP_API)'
-        & npx sequelize-cli db:migrate
-        if ($LASTEXITCODE -ne 0) { Write-Warn 'db:migrate did not succeed'; return $false }
+        Invoke-Native 'npx' @('sequelize-cli', 'db:migrate')
+        if ($script:LastNativeExit -ne 0) {
+            Write-Warn 'db:migrate did not succeed'; return $false
+        }
 
         return $true
     } finally {
@@ -371,6 +465,7 @@ function Invoke-LoadSchema {
 function Invoke-Up {
     Invoke-Start
     New-MarpDatabase
+    $script:DatabaseIsEmpty = Test-DatabaseEmpty
     $loaded = Invoke-LoadSchema
 
     Write-Host ''

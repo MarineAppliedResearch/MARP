@@ -17,6 +17,9 @@
 
     Commands:
 
+      setup     Everything: clone, install marp-api's dependencies, start a
+                database with the schema in it, and write marp-api's .env.
+                Idempotent -- skips whatever is already done.
       clone     Clone whatever is missing. Never touches what is already
                 there. The default, because it is what this script is for.
       list      What the registry declares, and whether it is present here.
@@ -29,7 +32,7 @@
                 up, down, status, env and destroy.
 
 .PARAMETER Command
-    One of clone, list, status, pull, doctor, db. Defaults to clone: it is the
+    One of setup, clone, list, status, pull, doctor, db. Defaults to clone: it is the
     reason this script exists, and it is safe to repeat -- it skips whatever is
     already present and refuses to write into a directory it did not create.
 
@@ -47,6 +50,10 @@
 .PARAMETER Protocol
     https (default) or ssh. https works with a credential helper or a token;
     ssh needs a key on the account. Only affects new clones.
+
+.EXAMPLE
+    .\scripts\marp.ps1 setup
+    Go from a bare clone of this repository to a database marp-api can use.
 
 .EXAMPLE
     .\scripts\marp.ps1
@@ -77,7 +84,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('clone', 'list', 'status', 'pull', 'doctor', 'db')]
+    [ValidateSet('setup', 'clone', 'list', 'status', 'pull', 'doctor', 'db')]
     [string]$Command = 'clone',
 
     # For most commands this narrows the work to one repository. For `db` it is
@@ -109,6 +116,41 @@ $RegistryPath = Join-Path $RepoRoot 'services\repos.yml'
 $LegacyDirectories = @{ 'MARE_API' = 'MARP_API' }
 
 $script:Failures = 0
+
+<#
+.SYNOPSIS
+    Run an external command without its stderr becoming a fatal error.
+
+.DESCRIPTION
+    Windows PowerShell with $ErrorActionPreference = 'Stop' turns anything a
+    native executable writes to stderr into a terminating error, regardless of
+    its exit code. npm writes ordinary notices there, so `npx sequelize-cli
+    db:migrate` aborted this script the moment npm mentioned a new version was
+    available -- a failure with no failure in it, and an intermittent one,
+    since it depended on whether npm felt talkative.
+
+    So the preference is relaxed for the duration of the call and the exit code
+    is what gets believed, which is the only thing that actually reports
+    success.
+
+.OUTPUTS
+    System.Int32. The command's exit code.
+#>
+function Invoke-Native {
+    param(
+        [Parameter(Mandatory)][string]$Command,
+        [string[]]$Arguments = @()
+    )
+
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Command @Arguments
+        return $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
 
 function Write-Fail { param([string]$Message) $script:Failures++; Write-Host "  FAIL  $Message" -ForegroundColor Red }
 function Write-Warn { param([string]$Message) Write-Host "  WARN  $Message" -ForegroundColor Yellow }
@@ -263,6 +305,11 @@ function Get-FirstLine {
     has to happen. When everything is done it says so and stops talking.
 #>
 function Show-NextSteps {
+    # setup runs clone as its first step and then does everything the list
+    # would tell someone to do, so printing it there describes work already
+    # under way.
+    if ($script:SuppressNextSteps) { return }
+
     $apiDir  = Join-Path $RepoRoot 'MARP_API'
     $steps   = New-Object System.Collections.ArrayList
 
@@ -293,6 +340,15 @@ function Show-NextSteps {
 
     Write-Host ''
     Write-Host 'Next:' -ForegroundColor Cyan
+
+    # More than one outstanding step means setup can do all of them, and
+    # listing five commands invites someone to run them by hand instead.
+    if ($steps.Count -gt 1) {
+        Write-Host '  Everything below in one command:'
+        Write-Host '       .\scripts\marp.ps1 setup' -ForegroundColor DarkGray
+        Write-Host ''
+    }
+
     $number = 1
     foreach ($step in $steps) {
         Write-Host ("  {0}. {1}" -f $number, $step[0])
@@ -301,6 +357,183 @@ function Show-NextSteps {
     }
     Write-Host ''
     Write-Host '  Full walkthrough: README.md, "Getting the whole workspace".' -ForegroundColor DarkGray
+}
+
+<#
+.SYNOPSIS
+    Set one key in a .env file, leaving every other line alone.
+
+.DESCRIPTION
+    Rewrites the key's assignment in place, and appends it if the file has
+    none. Everything else -- comments, ordering, unrelated settings -- survives
+    untouched, because marp-api's .env also holds Jellyfin credentials and
+    reporting connection details that nothing here has any business rewriting.
+
+    Only uncommented assignments are matched, and this is the whole subtlety.
+    An earlier version also un-commented lines beginning with the key, which
+    seemed helpful until it rewrote this line of .env.example's prose:
+
+        # DB_PORT=5433.
+
+    That is documentation about the virtual machine's port forward, not a
+    setting -- so DB_PORT was "set" in a comment while the real assignment
+    below it kept its old value, and the API would have quietly gone on
+    connecting to the wrong database. A commented-out setting and a comment
+    that happens to mention one are indistinguishable, so neither is touched.
+
+    Appending when there is no assignment is safe: dotenv resolves a duplicated
+    key to its last occurrence, verified rather than assumed.
+#>
+function Set-EnvValue {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Value
+    )
+
+    $lines = @(Get-Content -LiteralPath $Path)
+    $pattern = "^\s*$([regex]::Escape($Key))\s*="
+    $replaced = $false
+
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match $pattern) {
+            $lines[$i] = "$Key=$Value"
+            $replaced = $true
+            break
+        }
+    }
+
+    if (-not $replaced) { $lines += "$Key=$Value" }
+    Set-Content -LiteralPath $Path -Value $lines -Encoding ascii
+}
+
+<#
+.SYNOPSIS
+    Read one key's current value from a .env file.
+
+.OUTPUTS
+    System.String, or $null when the key is absent or commented out.
+#>
+function Get-EnvValue {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Key)
+
+    foreach ($line in Get-Content -LiteralPath $Path) {
+        if ($line -match "^\s*$([regex]::Escape($Key))\s*=\s*(.*)$") { return $Matches[1].Trim() }
+    }
+    return $null
+}
+
+<#
+.SYNOPSIS
+    Everything from a bare clone to a database marp-api can talk to.
+
+.DESCRIPTION
+    The steps this runs were, until now, a list printed for someone to carry
+    out by hand -- install dependencies, provision a database, copy a template,
+    paste six settings, invent a session secret. None of that needed a human:
+    the values all come from the database that was just created, and a
+    development secret is random bytes.
+
+    Idempotent by construction. Anything already done is skipped and reported,
+    so running it twice is a no-op rather than a reset. It deliberately stops
+    short of starting the API, which is a long-running process someone should
+    choose to start themselves.
+#>
+function Invoke-Setup {
+    param($Entries)
+
+    $script:SuppressNextSteps = $true
+    Invoke-Clone $Entries
+    $script:SuppressNextSteps = $false
+    if ($script:Failures -gt 0) {
+        Write-Host ''
+        Write-Host 'Stopping: not every repository could be cloned.' -ForegroundColor Red
+        return
+    }
+
+    $apiDir = Join-Path $RepoRoot 'MARP_API'
+    if (-not (Test-Path -LiteralPath (Join-Path $apiDir 'package.json'))) {
+        Write-Fail 'MARP_API is not present, so there is nothing to configure.'
+        return
+    }
+
+    foreach ($tool in @('node', 'npm')) {
+        if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
+            Write-Fail "$tool is not on PATH. Node comes from nvm-windows here; open a new terminal, or prepend C:/nvm4w/nodejs to PATH."
+            return
+        }
+    }
+
+    # Dependencies first: `db up` finishes by having marp-api load its schema,
+    # which it cannot do without them.
+    if (Test-Path -LiteralPath (Join-Path $apiDir 'node_modules')) {
+        Write-Pass 'MARP_API dependencies already installed'
+    } else {
+        Write-Host 'Installing MARP_API dependencies' -ForegroundColor Cyan
+        Push-Location $apiDir
+        try { $code = Invoke-Native 'npm' @('install') } finally { Pop-Location }
+        if ($code -ne 0) {
+            Write-Fail 'npm install failed. On Windows the native argon2 build needs the Visual Studio C++ build tools.'
+            return
+        }
+    }
+
+    Write-Host ''
+    & (Join-Path $PSScriptRoot 'db.ps1') up -Port $Port -Password $Password
+    if ($LASTEXITCODE -ne 0) { Write-Fail 'The database could not be prepared.'; return }
+
+    Write-Host ''
+    Write-Host 'Configuring MARP_API\.env' -ForegroundColor Cyan
+
+    $envPath = Join-Path $apiDir '.env'
+    $examplePath = Join-Path $apiDir '.env.example'
+
+    if (-not (Test-Path -LiteralPath $envPath)) {
+        if (-not (Test-Path -LiteralPath $examplePath)) { Write-Fail 'No .env and no .env.example to start from.'; return }
+        Copy-Item -LiteralPath $examplePath -Destination $envPath
+        Write-Pass 'created from .env.example'
+    } else {
+        # A file that already exists gets a copy kept before anything is
+        # changed. Only the database keys are rewritten, but somebody's
+        # configuration is not the place to be relying on that being bug-free.
+        Copy-Item -LiteralPath $envPath -Destination "$envPath.bak" -Force
+        Write-Pass 'existing .env backed up to .env.bak'
+    }
+
+    foreach ($pair in @(
+        @('DB_HOST', '127.0.0.1'), @('DB_PORT', "$Port"), @('DB_NAME', 'mare_v1'),
+        @('DB_USER', 'marp_user'), @('DB_PASSWORD', $Password), @('DB_DIALECT', 'postgres')
+    )) {
+        Set-EnvValue -Path $envPath -Key $pair[0] -Value $pair[1]
+    }
+    Write-Pass 'DB_* settings point at the local database'
+
+    # Only filled when it is missing or still the template's placeholder: an
+    # existing secret is somebody's session state, and replacing it silently
+    # logs everyone out.
+    $secret = Get-EnvValue -Path $envPath -Key 'AUTH_SESSION_SECRET'
+    if ([string]::IsNullOrWhiteSpace($secret) -or $secret -like 'replace-with*') {
+        $bytes = New-Object byte[] 48
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+        Set-EnvValue -Path $envPath -Key 'AUTH_SESSION_SECRET' -Value ([Convert]::ToBase64String($bytes))
+        Write-Pass 'AUTH_SESSION_SECRET generated'
+    } else {
+        Write-Pass 'AUTH_SESSION_SECRET already set, left alone'
+    }
+
+    $admin = Get-EnvValue -Path $envPath -Key 'BOOTSTRAP_ADMIN_NAME'
+    if ([string]::IsNullOrWhiteSpace($admin) -or $admin -like 'replace-with*') {
+        Set-EnvValue -Path $envPath -Key 'BOOTSTRAP_ADMIN_NAME' -Value $env:USERNAME
+        Write-Pass "BOOTSTRAP_ADMIN_NAME set to $env:USERNAME"
+    }
+
+    Write-Host ''
+    Write-Host 'Ready. Start the API with:' -ForegroundColor Green
+    Write-Host '    cd MARP_API'
+    Write-Host '    npm run dev'
+    Write-Host ''
+    Write-Host '  Serves http://localhost:3000 -- also /api-docs and /developer-docs.' -ForegroundColor DarkGray
+    Write-Host '  Jellyfin settings in .env are only needed for routes that resolve media.' -ForegroundColor DarkGray
 }
 
 # ---------------------------------------------------------------------------
@@ -566,6 +799,7 @@ if ($Command -eq 'db') {
 $entries = Read-Registry
 
 switch ($Command) {
+    'setup'  { Invoke-Setup  $entries }
     'clone'  { Invoke-Clone  $entries }
     'list'   { Invoke-List   $entries }
     'status' { Invoke-Status $entries }
