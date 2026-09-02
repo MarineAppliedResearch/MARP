@@ -147,9 +147,18 @@ function Invoke-Pg {
     $exe = Join-Path $BinDir "$Tool.exe"
     if (-not (Test-Path -LiteralPath $exe)) { throw "$Tool is missing from .postgres. Run: marp db up" }
 
-    $previous = $env:PGPASSWORD
+    # ErrorActionPreference is relaxed for the call: with 'Stop', anything
+    # psql writes to stderr becomes a terminating error regardless of its exit
+    # code, so a query that merely reports a missing relation took the whole
+    # script down instead of returning a value the caller could handle.
+    $previousPassword = $env:PGPASSWORD
+    $previousAction = $ErrorActionPreference
     $env:PGPASSWORD = $Password
-    try { & $exe @Arguments } finally { $env:PGPASSWORD = $previous }
+    $ErrorActionPreference = 'Continue'
+    try { & $exe @Arguments } finally {
+        $env:PGPASSWORD = $previousPassword
+        $ErrorActionPreference = $previousAction
+    }
 }
 
 function Test-Running {
@@ -538,14 +547,19 @@ function Invoke-Status {
 
     Write-Ok "running on ${DbHost}:$Port"
 
-    $summary = (Invoke-Pg psql @('-h', $DbHost, '-p', "$Port", '-U', $Role, '-d', $Database, '-tAc', @"
-select (select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE')
-    || ' tables, '
-    || (select count(*) from information_schema.tables where table_schema='public' and table_type='VIEW')
-    || ' views, '
-    || (select count(*) from "SequelizeMeta")
-    || ' migrations applied'
-"@) 2>$null) -join ''
+    # SequelizeMeta needs its quotes: unquoted identifiers are folded to
+    # lower case by PostgreSQL, and there is no `sequelizemeta`. The quotes are
+    # backslash-escaped because PowerShell does not escape embedded quotes when
+    # building a native process's command line -- they were being stripped, so
+    # this query failed against a database that was perfectly healthy.
+    $summarySql = 'select (select count(*) from information_schema.tables where table_schema=' +
+        "'public'" + ' and table_type=' + "'BASE TABLE'" + ') || ' + "' tables, '" +
+        ' || (select count(*) from information_schema.tables where table_schema=' + "'public'" +
+        ' and table_type=' + "'VIEW'" + ') || ' + "' views, '" +
+        ' || (select count(*) from \"SequelizeMeta\") || ' + "' migrations applied'"
+
+    $summary = (Invoke-Pg psql @('-h', $DbHost, '-p', "$Port", '-U', $Role, '-d', $Database,
+                                 '-tAc', $summarySql) 2>$null) -join ''
 
     if ($LASTEXITCODE -eq 0 -and $summary) { Write-Ok "$Database`: $summary" }
     else { Write-Warn "$Database has no schema yet -- see: marp db up" }
