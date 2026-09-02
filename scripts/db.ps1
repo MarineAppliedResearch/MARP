@@ -424,6 +424,22 @@ function Invoke-LoadSchema {
     # does not have the symlink on PATH -- so "node is not recognised" is a
     # routine state in this workspace, not a broken machine. Blaming
     # init-database.js for it would send someone debugging the wrong thing.
+    # The script being called has to exist. It lives on marp-api's develop
+    # branch, and cloning GitHub's default put workspaces on master -- a year
+    # behind, without this file. That surfaced as a Node module-not-found stack
+    # trace, which says nothing about the actual problem, so the branch is
+    # named instead.
+    $initScript = Join-Path $ApiDir 'scripts\init-database.js'
+    if (-not (Test-Path -LiteralPath $initScript)) {
+        $branch = (& git -C $ApiDir rev-parse --abbrev-ref HEAD 2>$null) -join ''
+        Write-Warn "MARP_API has no scripts/init-database.js, so the schema was not loaded."
+        Write-Warn "It is on branch '$branch', which does not carry it. The registry expects develop:"
+        Write-Warn '    cd MARP_API; git checkout develop; npm install'
+        Write-Warn 'If checkout refuses because package-lock.json changed, that change is'
+        Write-Warn 'npm''s own: git checkout -- package-lock.json first.'
+        return $false
+    }
+
     foreach ($tool in @('node', 'npx')) {
         if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) {
             Write-Warn "$tool is not on PATH, so the schema was not loaded."
