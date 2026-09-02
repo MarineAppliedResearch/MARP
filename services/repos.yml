@@ -13,7 +13,13 @@
 # Fields:
 #   repository      - GitHub repository, or null if it does not exist yet
 #   directory       - clone location relative to this umbrella repository root
-#   default_branch  - the branch a fresh clone should land on. NOT necessarily
+#   default_branch  - the branch a fresh clone should land on. This is a
+#                     development workspace, so it is `develop` wherever a
+#                     repository has one: marp-api, marp-inference-worker and
+#                     video-processing-gui. marp-video-player and marp-jellyfin
+#                     have no develop branch at all and stay on master.
+#
+#                     NOT necessarily
 #                     GitHub's default branch: marp-api's default is master,
 #                     which is roughly a year and 147 commits behind the branch
 #                     work actually happens on. Cloning GitHub's default gave a
@@ -86,7 +92,7 @@ components:
   marp-inference-worker:
     repository: MarineAppliedResearch/marp-inference-worker
     directory: marp-inference-worker
-    default_branch: master
+    default_branch: develop
     visibility: public
     role: Machine-learning inference service
     runtime: Python >= 3.10, ultralytics, NVIDIA GPU
@@ -96,6 +102,13 @@ components:
       Vendors ByteTrack as a subdirectory. Requires an NVIDIA GPU to run,
       though not to build, which makes it the least portable component to
       deploy. Optional in a MARP install.
+
+      Cloned at develop, which is ahead of GitHub's default of master.
+
+      Around 63 MB to clone, of which roughly 54 MB is ByteTrack's demo GIFs
+      and a sample video -- nothing needed to build or run it. On a slow
+      connection this is by far the longest clone, and it is the one component
+      you can skip while testing anything else.
 
   marp-video-player:
     repository: MarineAppliedResearch/marp-video-player

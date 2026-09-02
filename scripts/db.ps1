@@ -60,7 +60,11 @@ param(
 
     [int]$Port = 5432,
 
-    [string]$Password = 'marp_dev_password'
+    [string]$Password = 'marp_dev_password',
+
+    # Set by `marp setup`, which writes marp-api's .env itself -- so printing
+    # settings for someone to copy in the middle of that is just noise.
+    [switch]$Quiet
 )
 
 $ErrorActionPreference = 'Stop'
@@ -122,7 +126,11 @@ function Invoke-Native {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $Command @Arguments
+        # Out-Host, not the success stream: a function's uncaptured output
+        # becomes its return value, so letting npm's chatter through made
+        # `return $false` into an array -- and an array is truthy, so a failure
+        # reported itself as success on the very next line.
+        & $Command @Arguments | Out-Host
         $script:LastNativeExit = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previous
@@ -517,7 +525,7 @@ function Invoke-Up {
     Write-Host ''
     if ($loaded) {
         Write-Host 'Database ready.' -ForegroundColor Green
-        Invoke-Env
+        if (-not $Quiet) { Invoke-Env }
     } else {
         Write-Host 'Database is running, but the schema is not loaded.' -ForegroundColor Yellow
         Write-Host ''
@@ -526,7 +534,7 @@ function Invoke-Up {
         Write-Host '    npm install                      # if you have not already'
         Write-Host '    node scripts/init-database.js'
         Write-Host '    npx sequelize-cli db:migrate'
-        Invoke-Env
+        if (-not $Quiet) { Invoke-Env }
     }
 }
 

@@ -17,9 +17,10 @@
 
     Commands:
 
-      setup     Everything: clone, install marp-api's dependencies, start a
-                database with the schema in it, and write marp-api's .env.
-                Idempotent -- skips whatever is already done.
+      setup     Everything: clone, install marp-api's dependencies, write its
+                .env, build a database with the schema, give the first
+                administrator a password, and hand the annotation GUI an
+                application token. Idempotent -- skips what is already done.
       clone     Clone whatever is missing. Never touches what is already
                 there. The default, because it is what this script is for.
       list      What the registry declares, and whether it is present here.
@@ -100,7 +101,19 @@ param(
 
     # Passed through to scripts/db.ps1 by the `db` command.
     [int]$Port = 5432,
-    [string]$Password = 'marp_dev_password'
+    [string]$Password = 'marp_dev_password',
+
+    # setup only. The first administrator's display name reaches the bootstrap
+    # migration through .env, so it has to be decided before the database is
+    # built rather than after.
+    [string]$AdminName = $env:USERNAME,
+    [string]$AdminUsername = $env:USERNAME,
+
+    # Prompted for when omitted. Pass it to run setup unattended.
+    [string]$AdminPassword,
+
+    # Skip creating the application token for the annotation GUI.
+    [switch]$NoToken
 )
 
 $ErrorActionPreference = 'Stop'
@@ -133,8 +146,13 @@ $script:Failures = 0
     is what gets believed, which is the only thing that actually reports
     success.
 
+    The exit code is left in $script:LastNativeExit rather than returned, and
+    the command's own output goes to the host rather than down the pipeline --
+    both because a PowerShell function returns everything it emits, so mixing
+    them makes each unusable.
+
 .OUTPUTS
-    System.Int32. The command's exit code.
+    None.
 #>
 function Invoke-Native {
     param(
@@ -145,8 +163,12 @@ function Invoke-Native {
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        & $Command @Arguments
-        return $LASTEXITCODE
+        # Out-Host, not the success stream: a function's uncaptured output
+        # becomes its return value, so letting npm's chatter through made
+        # `return $false` into an array -- and an array is truthy, so a failure
+        # reported itself as success on the very next line.
+        & $Command @Arguments | Out-Host
+        $script:LastNativeExit = $LASTEXITCODE
     } finally {
         $ErrorActionPreference = $previous
     }
@@ -445,6 +467,7 @@ function Invoke-Setup {
     $script:SuppressNextSteps = $true
     Invoke-Clone $Entries
     $script:SuppressNextSteps = $false
+
     if ($script:Failures -gt 0) {
         Write-Host ''
         Write-Host 'Stopping: not every repository could be cloned.' -ForegroundColor Red
@@ -464,38 +487,85 @@ function Invoke-Setup {
         }
     }
 
-    # Dependencies first: `db up` finishes by having marp-api load its schema,
-    # which it cannot do without them.
+    # Dependencies first: the database step finishes by having marp-api load
+    # its schema, which it cannot do without them.
     if (Test-Path -LiteralPath (Join-Path $apiDir 'node_modules')) {
         Write-Pass 'MARP_API dependencies already installed'
     } else {
         Write-Host 'Installing MARP_API dependencies' -ForegroundColor Cyan
         Push-Location $apiDir
-        try { $code = Invoke-Native 'npm' @('install') } finally { Pop-Location }
-        if ($code -ne 0) {
+        try { Invoke-Native 'npm' @('install') } finally { Pop-Location }
+        if ($script:LastNativeExit -ne 0) {
             Write-Fail 'npm install failed. On Windows the native argon2 build needs the Visual Studio C++ build tools.'
             return
         }
     }
 
+    # Configuration before the database, and this ordering is load-bearing. The
+    # bootstrap migration names the first administrator from
+    # BOOTSTRAP_ADMIN_NAME, which it reads from .env -- so writing .env
+    # afterwards, as this used to, meant the migration had already fallen back
+    # to a generic default and the name arrived too late to have any effect.
     Write-Host ''
-    & (Join-Path $PSScriptRoot 'db.ps1') up -Port $Port -Password $Password
+    Write-Host 'Configuring MARP_API\.env' -ForegroundColor Cyan
+    if (-not (Set-ApiEnvironment -ApiDir $apiDir)) { return }
+
+    Write-Host ''
+    & (Join-Path $PSScriptRoot 'db.ps1') up -Port $Port -Password $Password -Quiet
     if ($LASTEXITCODE -ne 0) { Write-Fail 'The database could not be prepared.'; return }
 
     Write-Host ''
-    Write-Host 'Configuring MARP_API\.env' -ForegroundColor Cyan
+    Write-Host 'First administrator' -ForegroundColor Cyan
+    $loginReady = Set-FirstAdministrator -ApiDir $apiDir
 
-    $envPath = Join-Path $apiDir '.env'
-    $examplePath = Join-Path $apiDir '.env.example'
+    $token = $null
+    if (-not $NoToken) {
+        Write-Host ''
+        Write-Host 'Application token for the annotation GUI' -ForegroundColor Cyan
+        $token = New-AnnotationGuiToken -ApiDir $apiDir
+    }
+
+    Write-Host ''
+    Write-Host 'Ready. Start the API with:' -ForegroundColor Green
+    Write-Host '    cd MARP_API'
+    Write-Host '    npm run dev'
+    Write-Host ''
+    if ($loginReady) {
+        Write-Host "  Log in at http://localhost:3000 as '$AdminUsername'." -ForegroundColor DarkGray
+    } else {
+        Write-Host '  No login yet. Create one with:' -ForegroundColor Yellow
+        Write-Host "       cd MARP_API; node scripts/set-user-password.js --name ""$AdminName"" --username $AdminUsername" -ForegroundColor DarkGray
+    }
+    if ($token) {
+        Write-Host '  The annotation GUI has its token; build and run it.' -ForegroundColor DarkGray
+    }
+    Write-Host '  Jellyfin settings in .env are only needed for routes that resolve media.' -ForegroundColor DarkGray
+}
+
+<#
+.SYNOPSIS
+    Create or update MARP_API's .env for the local database.
+
+.OUTPUTS
+    System.Boolean. False when there was nothing to write to.
+#>
+function Set-ApiEnvironment {
+    param([Parameter(Mandatory)][string]$ApiDir)
+
+    $envPath = Join-Path $ApiDir '.env'
+    $examplePath = Join-Path $ApiDir '.env.example'
 
     if (-not (Test-Path -LiteralPath $envPath)) {
-        if (-not (Test-Path -LiteralPath $examplePath)) { Write-Fail 'No .env and no .env.example to start from.'; return }
+        if (-not (Test-Path -LiteralPath $examplePath)) {
+            Write-Fail 'No .env and no .env.example to start from.'
+            return $false
+        }
         Copy-Item -LiteralPath $examplePath -Destination $envPath
         Write-Pass 'created from .env.example'
     } else {
-        # A file that already exists gets a copy kept before anything is
-        # changed. Only the database keys are rewritten, but somebody's
-        # configuration is not the place to be relying on that being bug-free.
+        # A copy is kept before anything changes. Only the database keys are
+        # rewritten, but somebody's configuration file is not the place to rely
+        # on that being bug-free.
         Copy-Item -LiteralPath $envPath -Destination "$envPath.bak" -Force
         Write-Pass 'existing .env backed up to .env.bak'
     }
@@ -508,9 +578,8 @@ function Invoke-Setup {
     }
     Write-Pass 'DB_* settings point at the local database'
 
-    # Only filled when it is missing or still the template's placeholder: an
-    # existing secret is somebody's session state, and replacing it silently
-    # logs everyone out.
+    # Only filled when missing or still the template's placeholder: an existing
+    # secret is somebody's session state, and replacing it logs everyone out.
     $secret = Get-EnvValue -Path $envPath -Key 'AUTH_SESSION_SECRET'
     if ([string]::IsNullOrWhiteSpace($secret) -or $secret -like 'replace-with*') {
         $bytes = New-Object byte[] 48
@@ -523,18 +592,159 @@ function Invoke-Setup {
 
     $admin = Get-EnvValue -Path $envPath -Key 'BOOTSTRAP_ADMIN_NAME'
     if ([string]::IsNullOrWhiteSpace($admin) -or $admin -like 'replace-with*') {
-        Set-EnvValue -Path $envPath -Key 'BOOTSTRAP_ADMIN_NAME' -Value $env:USERNAME
-        Write-Pass "BOOTSTRAP_ADMIN_NAME set to $env:USERNAME"
+        Set-EnvValue -Path $envPath -Key 'BOOTSTRAP_ADMIN_NAME' -Value $AdminName
+        Write-Pass "BOOTSTRAP_ADMIN_NAME set to $AdminName"
+    } else {
+        Write-Pass "BOOTSTRAP_ADMIN_NAME already set to $admin"
     }
 
-    Write-Host ''
-    Write-Host 'Ready. Start the API with:' -ForegroundColor Green
-    Write-Host '    cd MARP_API'
-    Write-Host '    npm run dev'
-    Write-Host ''
-    Write-Host '  Serves http://localhost:3000 -- also /api-docs and /developer-docs.' -ForegroundColor DarkGray
-    Write-Host '  Jellyfin settings in .env are only needed for routes that resolve media.' -ForegroundColor DarkGray
+    return $true
 }
+
+<#
+.SYNOPSIS
+    Give the bootstrap administrator a password, so somebody can log in.
+
+.DESCRIPTION
+    The bootstrap migration grants the first account every right and sets no
+    credential, on purpose -- a password hash in a committed migration is a
+    credential in source control. Without this step the only administrator on a
+    new database holds every permission and cannot reach any of them.
+
+.OUTPUTS
+    System.Boolean. True when a login now exists.
+#>
+function Set-FirstAdministrator {
+    param([Parameter(Mandatory)][string]$ApiDir)
+
+    $passwordScript = Join-Path $ApiDir 'scripts\set-user-password.js'
+    if (-not (Test-Path -LiteralPath $passwordScript)) {
+        Write-Warn 'MARP_API has no scripts/set-user-password.js on this branch.'
+        return $false
+    }
+
+    $password = $AdminPassword
+    if ([string]::IsNullOrWhiteSpace($password)) {
+        # Read as a secure string so it is not echoed and does not reach shell
+        # history. Unattended runs should pass -AdminPassword instead.
+        try {
+            $secure = Read-Host -Prompt "  Password for '$AdminUsername'" -AsSecureString
+            $password = [Runtime.InteropServices.Marshal]::PtrToStringAuto(
+                [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure))
+        } catch {
+            Write-Warn 'Cannot prompt for a password here. Pass -AdminPassword, or set one later.'
+            return $false
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($password)) {
+        Write-Warn 'No password given, so no login was created.'
+        return $false
+    }
+
+    Push-Location $ApiDir
+    try {
+        Invoke-Native 'node' @('scripts/set-user-password.js',
+                               '--name', $AdminName, '--username', $AdminUsername,
+                               '--password', $password)
+    } finally { Pop-Location }
+
+    if ($script:LastNativeExit -ne 0) {
+        Write-Warn 'Could not set the password. Run set-user-password.js --list to see the accounts.'
+        return $false
+    }
+    return $true
+}
+
+<#
+.SYNOPSIS
+    Create an application token and hand it to the annotation GUI.
+
+.DESCRIPTION
+    Every route requires a permission, so the GUI cannot call anything without
+    a token -- and it reads one from a file in its own data directory rather
+    than being configured at runtime. The raw token is shown exactly once by
+    the script that mints it, so it is captured here and written straight to
+    that file, which is git-ignored in the GUI's repository.
+
+.OUTPUTS
+    System.String. The token, or $null when none was created.
+#>
+function New-AnnotationGuiToken {
+    param([Parameter(Mandatory)][string]$ApiDir)
+
+    $tokenScript = Join-Path $ApiDir 'scripts\create-application-token.js'
+    if (-not (Test-Path -LiteralPath $tokenScript)) {
+        Write-Warn 'MARP_API has no scripts/create-application-token.js on this branch.'
+        return $null
+    }
+
+    Push-Location $ApiDir
+    try {
+        $previous = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $output = & node 'scripts/create-application-token.js' '--app' 'MARE Video Processing GUI' '--preset' 'annotation-gui' 2>&1
+            $exit = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $previous }
+    } finally { Pop-Location }
+
+    if ($exit -ne 0) {
+        Write-Warn 'Could not create an application token.'
+        return $null
+    }
+
+    # The minting script frames the raw token between two rules and says it is
+    # not recoverable afterwards, so it is read from between them rather than
+    # asked for a second time.
+    $lines = @($output | ForEach-Object { "$_" })
+    $token = $null
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match '^-+ the token') {
+            $token = $lines[$i + 1].Trim()
+            break
+        }
+    }
+
+    if (-not $token) {
+        Write-Warn 'A token was created but could not be read from the output.'
+        Write-Warn 'Run create-application-token.js by hand to get one.'
+        return $null
+    }
+
+    Write-Pass 'token created'
+
+    $guiData = Join-Path $RepoRoot 'VIDEO_PROCESSING_GUI\MAREGUI_PROOFofCONCEPT\data'
+    if (-not (Test-Path -LiteralPath $guiData)) {
+        Write-Warn 'VIDEO_PROCESSING_GUI is not cloned, so the token was not delivered.'
+        Write-Host ''
+        Write-Host "  $token"
+        Write-Host ''
+        return $token
+    }
+
+    # No trailing newline: the GUI reads the file's contents as the token.
+    $tokenFile = Join-Path $guiData 'MARP_API_TOKEN.txt'
+    [IO.File]::WriteAllText($tokenFile, $token)
+    Write-Pass 'written to VIDEO_PROCESSING_GUI\MAREGUI_PROOFofCONCEPT\data\MARP_API_TOKEN.txt'
+
+    # The address file is tracked in that repository, so it is checked and
+    # reported rather than rewritten: changing it would show up as a
+    # modification somebody then has to explain.
+    $addressFile = Join-Path $guiData 'API_IP_ADDRESS.txt'
+    if (Test-Path -LiteralPath $addressFile) {
+        $current = (Get-Content -LiteralPath $addressFile -Raw).Trim()
+        if ($current -eq 'http://localhost:3000') {
+            Write-Pass "API address already $current"
+        } else {
+            Write-Warn "API_IP_ADDRESS.txt says $current, not http://localhost:3000."
+            Write-Warn 'That file is tracked in VIDEO_PROCESSING_GUI, so it is left alone.'
+        }
+    }
+
+    return $token
+}
+
 
 # ---------------------------------------------------------------------------
 # Commands
