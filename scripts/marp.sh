@@ -307,7 +307,14 @@ cmd_doctor() {
     head1 'Umbrella ignores every component directory'
     printf '%s\n' "$records" | while IFS='|' read -r grp name repo dir branch vis; do
         [ -n "$dir" ] || continue
-        if git -C "$REPO_ROOT" check-ignore --quiet -- "$dir/"; then
+        # Asking about a path inside the directory rather than about the
+        # directory itself. A trailing slash makes check-ignore report a false
+        # positive for a directory that no rule covers at all, and a bare name
+        # fails to match a directory-only rule when the directory is not yet on
+        # disk. "<dir>/.git" is right in both cases, and every one of these
+        # directories is a Git repository, so it is the honest thing to ask
+        # about.
+        if git -C "$REPO_ROOT" check-ignore --quiet -- "$dir/.git"; then
             pass "$dir/ is ignored"
         else
             fail "$dir/ is NOT ignored -- add it to .gitignore before committing here"
@@ -339,8 +346,15 @@ cmd_doctor() {
     any_legacy=0
     for pair in $LEGACY_DIRECTORIES; do
         old=${pair%%:*}; new=${pair#*:}
-        if [ -e "$REPO_ROOT/$old" ]; then
-            any_legacy=1
+        [ -e "$REPO_ROOT/$old" ] || continue
+        any_legacy=1
+        # An empty shell left behind by a part-finished rename is a different
+        # problem from a directory that still holds the repository, and telling
+        # someone to rename a directory they have already renamed would send
+        # them looking for work that is done.
+        if [ -z "$(ls -A "$REPO_ROOT/$old" 2>/dev/null)" ] && [ -d "$REPO_ROOT/$new/.git" ]; then
+            warn "$old/ is an empty leftover from the rename to $new/; delete it (something may still hold it open)"
+        else
             warn "$old/ is still here; it was renamed to $new/ -- rename it so the workspace file and the registry find it"
         fi
     done

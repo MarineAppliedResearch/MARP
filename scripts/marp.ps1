@@ -360,7 +360,14 @@ function Invoke-Doctor {
     Write-Host 'Umbrella ignores every component directory' -ForegroundColor Cyan
     foreach ($entry in $Entries) {
         if (-not $entry.directory) { continue }
-        & git -C $RepoRoot check-ignore --quiet -- "$($entry.directory)/" 2>&1 | Out-Null
+        # Asking about a path inside the directory rather than about the
+        # directory itself. A trailing slash makes check-ignore report a false
+        # positive for a directory that no rule covers at all, and a bare name
+        # fails to match a directory-only rule when the directory is not yet on
+        # disk. "<dir>/.git" is right in both cases, and every one of these
+        # directories is a Git repository, so it is the honest thing to ask
+        # about.
+        & git -C $RepoRoot check-ignore --quiet -- "$($entry.directory)/.git" 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) {
             Write-Pass "$($entry.directory)/ is ignored"
         } else {
@@ -393,9 +400,20 @@ function Invoke-Doctor {
     Write-Host 'Former directory names' -ForegroundColor Cyan
     $anyLegacy = $false
     foreach ($legacy in $LegacyDirectories.Keys) {
-        if (Test-Path -LiteralPath (Join-Path $RepoRoot $legacy)) {
-            $anyLegacy = $true
-            Write-Warn "$legacy/ is still here; it was renamed to $($LegacyDirectories[$legacy])/ -- rename it so the workspace file and the registry find it"
+        $legacyPath = Join-Path $RepoRoot $legacy
+        if (-not (Test-Path -LiteralPath $legacyPath)) { continue }
+        $anyLegacy = $true
+        $current = $LegacyDirectories[$legacy]
+
+        # An empty shell left behind by a part-finished rename is a different
+        # problem from a directory that still holds the repository, and telling
+        # someone to rename a directory they have already renamed would send
+        # them looking for work that is done.
+        $isEmpty = -not (Get-ChildItem -LiteralPath $legacyPath -Force -ErrorAction SilentlyContinue)
+        if ($isEmpty -and (Test-Path -LiteralPath (Join-Path $RepoRoot "$current\.git"))) {
+            Write-Warn "$legacy/ is an empty leftover from the rename to $current/; delete it (something may still hold it open)"
+        } else {
+            Write-Warn "$legacy/ is still here; it was renamed to $current/ -- rename it so the workspace file and the registry find it"
         }
     }
     if (-not $anyLegacy) { Write-Pass 'none present' }
