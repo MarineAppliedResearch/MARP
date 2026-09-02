@@ -6,79 +6,93 @@ The goal is a single system that builds easily and can be worked on as a whole, 
 
 ## Getting the whole workspace
 
-Clone this repository, then run one script. It reads `services/repos.yml` and clones every component into its own subdirectory, so everything is reachable from one place — by a person or by an agent — without merging any histories.
+Clone this repository and run one command. It clones every component, installs what the API needs, builds a database with the MARP schema in it, creates a login, and hands the annotation GUI an application token.
+
+```powershell
+git clone https://github.com/MarineAppliedResearch/MARP.git
+cd MARP
+.\scripts\marp.ps1 setup
+```
 
 ```bash
 git clone https://github.com/MarineAppliedResearch/MARP.git
 cd MARP
+sh scripts/marp.sh clone      # setup is Windows-only for now; see below
 ```
+
+`setup` prompts for a password for the first administrator. To run it unattended:
 
 ```powershell
-# Windows
-.\scripts\marp.ps1
+.\scripts\marp.ps1 setup -AdminName "Your Name" -AdminUsername you -AdminPassword secret
 ```
 
-```bash
-# Linux and macOS
-sh scripts/marp.sh
-```
-
-`clone` is the default, so a bare invocation fetches everything.
-
-Next install `marp-api`'s dependencies, **before** asking for a database — `db up` finishes by having `marp-api` load its schema, which it cannot do without them:
-
-```bash
-cd MARP_API
-npm install
-cd ..
-```
-
-Then get the database, which `marp-api` cannot run without:
+Then start the API:
 
 ```powershell
-.\scripts\marp.ps1 db up
-```
-
-```bash
-sh scripts/marp.sh db up
-```
-
-That downloads a self-contained PostgreSQL, starts it, and has `marp-api` load its schema — see [The database](#the-database).
-
-Finally, give `marp-api` its configuration and run it:
-
-```bash
 cd MARP_API
-cp .env.example .env      # PowerShell: Copy-Item .env.example .env
+npm run dev                   # http://localhost:3000
 ```
 
-Set the `DB_*` lines `db up` printed, plus `AUTH_SESSION_SECRET` to any long random string. The Jellyfin values are only needed for routes that resolve media; the API starts without them.
+Log in with the username you gave. `/api-docs` and `/developer-docs` are served from the same place.
 
-```bash
-npm run dev               # http://localhost:3000
-```
+Expect around 640 MB of repositories plus a 330 MB PostgreSQL download the first time. Every slow step reports progress, so a quiet minute means something is wrong rather than working.
 
-`marp` and `marp doctor` both end by printing whichever of these steps is still outstanding, so you do not have to keep this page open. `marp.code-workspace` opens a multi-root VS Code window over every repository at once.
+`setup` is idempotent: it skips whatever is already done, so it is safe to re-run after fixing whatever stopped it.
 
-`clone` skips anything already present and never writes into a directory it did not create, so it is safe to re-run. `VIDEO_PROCESSING_GUI` is private and needs credentials; the rest are public. Add `--group components` (`-Group components` in PowerShell) to skip the related repositories, or `--protocol ssh` to clone over SSH.
+### What setup actually does
 
-Any command takes a single repository, named either as the registry calls it or as the directory is spelled — both are accepted because both are what you have in front of you:
+1. Clones every repository in `services/repos.yml`, at the branch the registry names.
+2. Installs `marp-api`'s dependencies — **before** the database, because the database step finishes by having `marp-api` load its schema.
+3. Writes `MARP_API/.env`: the database settings, a generated `AUTH_SESSION_SECRET`, and `BOOTSTRAP_ADMIN_NAME`. This happens before the database is built, because the bootstrap migration reads that name when it creates the first administrator.
+4. Downloads and starts PostgreSQL, then has `marp-api` restore its baseline schema and run its migrations.
+5. Gives the first administrator a password. The bootstrap migration deliberately sets none — a password hash in a committed migration would be a credential in source control — so without this step the only administrator holds every permission and cannot log in.
+6. Mints the `annotation-gui` application token and writes it to `VIDEO_PROCESSING_GUI/MAREGUI_PROOFofCONCEPT/data/MARP_API_TOKEN.txt`, which is git-ignored there. Every route requires a permission, so the GUI cannot call anything without it.
 
-```bash
-sh scripts/marp.sh clone marp-api
-sh scripts/marp.sh status MARP_API
-```
+`API_IP_ADDRESS.txt` in that same directory is **tracked** in the GUI's repository, so `setup` checks it and reports rather than rewriting it.
 
-Other commands:
+### Individual commands
+
+`setup` is the whole thing; these are the parts.
 
 | Command | What it does |
 | --- | --- |
-| `list` | What the registry declares, and whether it is present here. The default. |
-| `clone` | Clone whatever is missing. |
+| `clone` | Clone whatever is missing. The default. |
+| `list` | What the registry declares, and whether it is present here. |
 | `status` | Branch, uncommitted changes and drift from upstream, per repository. |
 | `pull` | Fast-forward every clean repository. Skips any with uncommitted work. |
 | `doctor` | Check the workspace is sound. Run this if anything looks wrong. |
-| `db` | Provision and run the PostgreSQL database. `up`, `down`, `status`, `env`, `destroy`. |
+| `db` | The database: `up`, `down`, `status`, `env`, `destroy`. |
+
+Any command takes a single repository, named either as the registry calls it or as the directory is spelled — both are accepted because both are what you have in front of you:
+
+```powershell
+.\scripts\marp.ps1 clone marp-api
+.\scripts\marp.ps1 status MARP_API
+```
+
+`VIDEO_PROCESSING_GUI` is private and needs credentials; the rest are public. `-Group components` skips the related repositories, and `--protocol ssh` clones over SSH.
+
+### Which branch you get
+
+A development workspace wants the branch work happens on, which is not always GitHub's default. `marp-api`'s default is `master`, roughly a year and 147 commits behind — with no `routes/` directory and no baseline schema, so a workspace cloned from it cannot even build its own database.
+
+So the registry records the branch to develop on: `develop` for `marp-api`, `marp-inference-worker` and `video-processing-gui`. `marp-video-player` and `marp-jellyfin` have no `develop` branch at all and stay on `master`.
+
+### Starting over
+
+PostgreSQL lives inside the workspace, so it has to be stopped before the workspace can be deleted:
+
+```powershell
+.\scripts\marp.ps1 db down
+```
+
+`marp db destroy` deletes the database but keeps the PostgreSQL download, which is the quick way back to a clean database without re-downloading 330 MB.
+
+### Linux and macOS
+
+`scripts/marp.sh` covers `clone`, `list`, `status`, `pull`, `doctor` and `db`. `setup` is currently PowerShell only; on other platforms run `db up` and then `marp-api`'s own two commands, which the output tells you.
+
+On Linux, `db up` uses the PostgreSQL you already have rather than downloading one — the PostgreSQL project publishes no portable Linux build — and prints the install command if there is none.
 
 ## Workspace layout
 
