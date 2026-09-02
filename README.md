@@ -111,8 +111,13 @@ MARP/                        this repository
 ├── development/             developer setup and local-environment docs
 ├── services/                component registry and compatibility information
 ├── scripts/                 workspace management scripts
-└── legacy/                  historical MARP prototype code
+├── legacy/                  historical MARP prototype code
+└── .postgres/               the local PostgreSQL, fetched on demand
 ```
+
+`.postgres/` is git-ignored and holds both the server binaries and the database
+itself — around 920 MB once `marp db up` has run. It is not committed, and
+`marp db destroy` throws the database away.
 
 ### The umbrella never absorbs a component
 
@@ -132,6 +137,8 @@ When a component is added, update `.gitignore` and `services/repos.yml` together
 - Listens on **127.0.0.1 only**, on port 5432. If something is already there it stops and says so rather than quietly moving — pass `--port` (`-Port`) to place it elsewhere.
 
 On Linux it uses the PostgreSQL you already have instead of downloading one, because the PostgreSQL project publishes no portable Linux build; if none is installed it prints the one-line command to install it.
+
+**Production runs PostgreSQL 14 and this runs 18.** The baseline schema was captured from production and restores forward into 18 without complaint. The reverse is not true, so nothing built locally can be moved back to production without care — schema changes travel as migrations, which is the only route that works in both directions.
 
 **The schema is not the umbrella's.** It belongs to `marp-api`, which carries the baseline and every migration, so `db up` finishes by running `marp-api`'s own commands against the new database. If `marp-api` is not cloned, not installed, or Node is not on `PATH`, it stops and prints those commands — a running database and honest instructions beat a silently half-finished one.
 
@@ -160,10 +167,24 @@ Nothing forces you to use it. `marp-api` connects through five `DB_*` variables 
 
 `marp-video-player` was extracted from `MARP_API` on 2026-08-31 and is now standalone, with its own build, tests, and docs. It is deliberately not a dependency of `MARP_API` — the two are disconnected.
 
+It is published to npm, currently **0.4.0**, which is also the version bundled into `VIDEO_PROCESSING_GUI`. That GUI consumes it through a WebView2 host, so the `MarpVideoEngine` global, the `postMessage` protocol and `app/player.html`'s query parameters are a contract between two repositories and cannot change casually.
+
 The API repository was renamed from `MARE_API` to `MARP_API`. GitHub still redirects the old name, which means a stale reference appears to work right up until somebody creates a new repository called `MARE_API`. Always use `MARP_API`.
 
 ## Status
 
-The umbrella provides the workspace layout, the component registry, and the workspace management script under `scripts/`. No cross-component build or deployment definition exists yet, and nothing verifies that a change in one component still works against another. Those are open work.
+What the umbrella provides today:
+
+- The workspace layout and the component registry (`services/repos.yml`).
+- `scripts/marp` — clone, list, status, pull, doctor.
+- `scripts/marp db` — a PostgreSQL, provisioned and populated, with no installer or container runtime.
+- `scripts/marp.ps1 setup` — a bare clone to a running database with a login and a GUI token, in one command.
+
+What does not exist yet:
+
+- **Nothing verifies a change in one component against another.** A `MARP_API` change that breaks the annotation GUI, or a player change that breaks its WebView2 host, is still found by hand. This is the largest remaining gap.
+- No cross-component build or deployment definition.
+- `setup` is PowerShell only. `scripts/marp.sh` covers everything else.
+- `marp-jellyfin` cannot be built locally; it needs the .NET 9 SDK and currently runs on the development VM.
 
 The `legacy/` directory is retained for reference. New platform-level work belongs in the appropriate top-level directory rather than in `legacy/`.
