@@ -44,6 +44,11 @@
     leaving your .env disagreeing with reality -- pass -Port to place it
     elsewhere deliberately.
 
+.PARAMETER DataDirName
+    Place this database under .postgres/instances/<name> instead of the default
+    location, so two worktrees on one machine do not share one data directory.
+    Pass a different -Port with it.
+
 .PARAMETER Password
     Password for the database role. Defaults to a well-known development
     value. The server listens only on 127.0.0.1.
@@ -62,6 +67,12 @@ param(
 
     [string]$Password = 'marp_dev_password',
 
+    # A separate database under .postgres/instances/<name>, so a second worktree on
+    # this machine gets its own. The PostgreSQL binaries stay shared -- a second
+    # worktree needs its own data directory, not its own 300 MB download. It needs
+    # its own -Port too: one server cannot serve two data directories.
+    [string]$DataDirName,
+
     # Set by `marp setup`, which writes marp-api's .env itself -- so printing
     # settings for someone to copy in the middle of that is just noise.
     [switch]$Quiet
@@ -72,8 +83,14 @@ $ErrorActionPreference = 'Stop'
 $RepoRoot    = Split-Path -Parent $PSScriptRoot
 $PostgresDir = Join-Path $RepoRoot '.postgres'
 $BinDir      = Join-Path $PostgresDir 'pgsql\bin'
-$DataDir     = Join-Path $PostgresDir 'data'
-$LogFile     = Join-Path $PostgresDir 'server.log'
+if ($DataDirName) {
+    $InstanceDir = Join-Path $PostgresDir "instances\$DataDirName"
+    $DataDir     = Join-Path $InstanceDir 'data'
+    $LogFile     = Join-Path $InstanceDir 'server.log'
+} else {
+    $DataDir     = Join-Path $PostgresDir 'data'
+    $LogFile     = Join-Path $PostgresDir 'server.log'
+}
 
 # Pinned rather than tracking latest, so "it worked last week" stays
 # traceable. 18.6 matches the development server, removing one difference

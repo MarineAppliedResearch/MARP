@@ -1,0 +1,34 @@
+name: Task
+description: A piece of work with a settled-enough goal to start investigating.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The issue holds the goal and the conversation. The specification itself lives in
+        `.marp/task.md` on the task's own branch — see ADR-0003. Answers you give in the
+        comments here get folded into that file.
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What changes for the person using MARP. Not what changes in the code.
+    validations: { required: true }
+  - type: input
+    id: repos
+    attributes:
+      label: Repositories
+      description: Which are affected. A change spanning two is one specification, not two.
+      placeholder: MARP_API, marp-video-player
+    validations: { required: true }
+  - type: textarea
+    id: known
+    attributes:
+      label: What is already settled
+      description: Decisions already made, so the agent does not reopen them.
+  - type: textarea
+    id: unclear
+    attributes:
+      label: What you already know is unclear
+      description: >
+        Optional. The agent will surface its own assumptions during G1; this is for the
+        ones you can already see.

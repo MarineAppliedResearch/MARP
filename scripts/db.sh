@@ -32,8 +32,12 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(dirname -- "$SCRIPT_DIR")
 POSTGRES_DIR="$REPO_ROOT/.postgres"
-DATA_DIR="$POSTGRES_DIR/data"
-LOG_FILE="$POSTGRES_DIR/server.log"
+# Set after argument parsing, because --data-dir moves them. The PostgreSQL binaries
+# stay in .postgres/ and are shared: a second worktree needs its own data directory,
+# not its own 300 MB download.
+DATA_DIR=
+LOG_FILE=
+INSTANCE=
 API_DIR="$REPO_ROOT/MARP_API"
 
 # Pinned rather than tracking latest, so "it worked last week" stays
@@ -65,6 +69,9 @@ Commands:
 
 Options:
   --port N        TCP port. Default 5432.
+  --data-dir NAME A separate database under .postgres/instances/NAME, so a second
+                  worktree on this machine gets its own. Needs its own --port too;
+                  one server cannot serve two data directories.
   --password P    Password for the database role.
   -h, --help      This text.
 USAGE
@@ -74,12 +81,21 @@ while [ $# -gt 0 ]; do
     case "$1" in
         up|down|status|env|destroy) COMMAND=$1 ;;
         --port) PORT=${2:?--port needs a value}; shift ;;
+        --data-dir) INSTANCE=${2:?--data-dir needs a value}; shift ;;
         --password) PASSWORD=${2:?--password needs a value}; shift ;;
         -h|--help) usage; exit 0 ;;
         *) printf 'Unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
     esac
     shift
 done
+
+if [ -n "$INSTANCE" ]; then
+    DATA_DIR="$POSTGRES_DIR/instances/$INSTANCE/data"
+    LOG_FILE="$POSTGRES_DIR/instances/$INSTANCE/server.log"
+else
+    DATA_DIR="$POSTGRES_DIR/data"
+    LOG_FILE="$POSTGRES_DIR/server.log"
+fi
 
 if [ -t 1 ]; then
     C_CYN=$(printf '\033[36m'); C_YEL=$(printf '\033[33m')

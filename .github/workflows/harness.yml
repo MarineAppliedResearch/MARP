@@ -1,0 +1,33 @@
+# The umbrella's own checks.
+#
+# This is where the harness scripts live, so this is the workflow that proves they run.
+# It checks the umbrella's instruction files; the components check their own, against this
+# repository, in their own workflows.
+
+name: harness
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+jobs:
+  harness:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22' }
+
+      # No component is checked out here, so the registry finds nothing and the scan is
+      # the umbrella's own files. That is the intent.
+      - name: Instruction files carry no credential or stale environment fact
+        run: node scripts/harness/doc-check.mjs
+
+      - name: The harness scripts parse
+        run: for f in scripts/harness/*.mjs scripts/harness/hooks/*.mjs; do node --check "$f"; done
+
+      # The gates are the point of the harness. A regression in them is silent otherwise:
+      # a gate that always allows looks exactly like a gate with nothing to block.
+      - name: The gates actually gate
+        run: node scripts/harness/self-test.mjs

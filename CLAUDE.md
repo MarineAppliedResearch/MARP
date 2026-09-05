@@ -1,8 +1,13 @@
 # MARP workspace
 
+**Read [AGENTS.md](AGENTS.md) first.** It is the tool-neutral source: the workflow and its
+gates, the rules that are not negotiable, how assumptions are surfaced, and the testing
+doctrine. This file is the operational companion — how to build, run and test each part,
+and what currently does not work. Where the two ever disagree, `AGENTS.md` wins.
+
 This is the workspace root for the MARP ecosystem. Each subdirectory listed below is an independent Git repository. Work here when a change spans more than one component.
 
-`services/repos.yml` is the canonical registry. This file is the operational companion: how to build, run, and test each part, and what currently does not work.
+`services/repos.yml` is the canonical registry.
 
 ## Getting the workspace
 
@@ -90,7 +95,7 @@ All four cost real time, and all four are silent:
 The MARP API and application backend. Also serves the browser applications from `frontend/apps/`. The video player is no longer among them; it moved to its own repository.
 
 - **Runtime:** Node 22.22.1, pinned in `.nvmrc`. Installed via nvm-windows at `C:\nvm4w\nodejs`.
-- **Database:** development PostgreSQL runs on the Ubuntu VirtualBox VM `MARP DEV ENVIRONMENT`, reached at `localhost:5433` through a NAT port forward. Database `mare_v1`, role `mare_user`.
+- **Database:** `marp db up` from this workspace. `marp db status` says where yours is listening and `marp db env` prints the `DB_*` lines for `.env`. The shared VM that used to serve this is being retired; nothing here should name a host or a port, because `db up --port` makes any literal wrong.
 - **Config:** `.env` in the repo root, git-ignored. `.env.example` documents every variable.
 
 ```bash

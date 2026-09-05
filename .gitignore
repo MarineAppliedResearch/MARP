@@ -52,3 +52,11 @@ node_modules/
 .env
 .env.*
 !.env.example
+
+# --- Harness: machine-specific operational notes ---
+#
+# Hosts, accounts, ports and key paths for one developer's machines. Repository files
+# may name that a credential exists and where it lives, never its value; this is where
+# the value goes. `marp harness check` fails if one leaks into a tracked file.
+/.marp/local/*
+!/.marp/local/hosts.example.md
