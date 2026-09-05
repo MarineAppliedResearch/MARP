@@ -31,7 +31,8 @@
 import { spawnSync, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, cpSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { join, resolve, relative, sep } from 'node:path';
 import { UMBRELLA, readRegistry, step, ok, warn, fail, dim, cyan } from './lib.mjs';
 
 /** Where isolated copies live. Outside the umbrella, so it never sees them. */
@@ -83,6 +84,26 @@ function countFiles(dir) {
   return n;
 }
 
+/**
+ * Every directory here that is its own npm package with its own lock file.
+ *
+ * Shallow on purpose: applications live a few levels down, and walking the whole tree
+ * would find fixtures and vendored copies that nobody wants installed.
+ */
+function packageDirs(root, depth = 0) {
+  const found = [];
+  if (existsSync(join(root, 'package.json')) && existsSync(join(root, 'package-lock.json'))) {
+    found.push(root);
+  }
+  if (depth >= 4) return found;
+  for (const entry of readdirSync(root, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
+    found.push(...packageDirs(join(root, entry.name), depth + 1));
+  }
+  return found;
+}
+
 /** A branch name has to survive being a directory name and a database directory. */
 const slug = (s) => s.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 
@@ -98,6 +119,49 @@ function sharedEnvLines(repoPath) {
   const lines = readFileSync(source, 'utf8').split(/\r?\n/)
     .filter((l) => keep.test(l.trim()));
   return { lines, found: lines.length > 0 };
+}
+
+/**
+ * The ports this checkout's Playwright configs will serve on.
+ *
+ * Mirrors the derivation in `playwright.config.mjs`: a hash of the config file's own
+ * absolute path. Duplicated deliberately and narrowly -- the alternative is importing an
+ * application's config from the workspace tool, which couples them far worse.
+ */
+function playwrightPorts(root) {
+  const ports = [];
+  for (const dir of packageDirs(root)) {
+    const cfg = join(dir, 'playwright.config.mjs');
+    if (!existsSync(cfg)) continue;
+    const hash = createHash('sha1').update(cfg).digest('hex').slice(0, 6);
+    ports.push(8100 + (parseInt(hash, 16) % 700));
+  }
+  return ports;
+}
+
+/** What is listening on a port, and who owns it. Windows and POSIX differ; both are tried. */
+function listenerPid(port) {
+  if (process.platform === 'win32') {
+    const r = spawnSync('powershell', ['-NoProfile', '-Command',
+      `(Get-NetTCPConnection -State Listen -LocalPort ${port} -ErrorAction SilentlyContinue | Select-Object -First 1).OwningProcess`],
+      { encoding: 'utf8' });
+    const pid = Number((r.stdout || '').trim());
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  }
+  const r = spawnSync('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8' });
+  const pid = Number(String(r.stdout || '').match(/[0-9]+/) || [0]);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+}
+
+function stopListener(port) {
+  const pid = listenerPid(port);
+  if (!pid) return false;
+  if (process.platform === 'win32') {
+    spawnSync('powershell', ['-NoProfile', '-Command', `Stop-Process -Id ${pid} -Force`], { stdio: 'ignore' });
+  } else {
+    spawnSync('kill', ['-9', String(pid)], { stdio: 'ignore' });
+  }
+  return true;
 }
 
 /* --------------------------------------------------------------------- start */
@@ -131,7 +195,14 @@ async function start(repoName, branch) {
   const needsDb = existsSync(join(dir, 'scripts', 'init-database.js'));
   const dbPort = needsDb ? await freePort(DB_BASE, taken) : null;
 
-  const meta = { name, repo: entry.name, directory: entry.directory, branch, apiPort, dbPort, created: new Date().toISOString() };
+  /* The app's Playwright config derives its own port from the config file's path, so
+     record it here too -- otherwise nothing but that config knows the number, and a
+     server left behind on it cannot be found again. */
+  const testPorts = playwrightPorts(dir);
+  const meta = {
+    name, repo: entry.name, directory: entry.directory, branch,
+    apiPort, dbPort, testPorts, created: new Date().toISOString(),
+  };
   writeFileSync(join(dir, '.marp-agent.json'), JSON.stringify(meta, null, 2) + '\n');
   ok(`api port ${apiPort}${dbPort ? `, database port ${dbPort}` : ''}`);
 
@@ -206,10 +277,19 @@ async function start(repoName, branch) {
     }
   }
 
-  if (existsSync(join(dir, 'package.json'))) {
-    step('Dependencies');
-    const r = spawnSync('npm', ['ci'], { cwd: dir, stdio: 'inherit', shell: true });
-    if (r.status !== 0) warn('npm ci failed — run it yourself in the directory above');
+  /*
+   * Dependencies, including the nested packages.
+   *
+   * `npm ci` at the root installs the root only. marp-api's frontend applications are
+   * separate packages with their own lock files -- deliberately, so one can be extracted
+   * later -- and an agent that starts work on an application finds no node_modules and no
+   * test runner. That was the first thing to go wrong the first time this was used.
+   */
+  for (const pkgDir of packageDirs(dir)) {
+    const where = pkgDir === dir ? 'root' : relative(dir, pkgDir).split(sep).join('/');
+    step(`Dependencies (${where})`);
+    const r = spawnSync('npm', ['ci'], { cwd: pkgDir, stdio: 'inherit', shell: true });
+    if (r.status !== 0) warn(`npm ci failed in ${where} — run it yourself`);
     else ok('installed');
   }
 
@@ -268,9 +348,24 @@ function db(a, command) {
   spawnSync(win ? 'powershell' : 'sh', args, { stdio: 'inherit' });
 }
 
+/**
+ * Stop everything this agent left running.
+ *
+ * A server outliving the work that started it is not untidiness. One left running in a
+ * different checkout was adopted by another workspace's browser tests, which then graded
+ * that checkout's code for an hour without saying so.
+ */
+function stopServers(a) {
+  const ports = [a.apiPort, ...(a.testPorts || [])].filter(Boolean);
+  const stopped = ports.filter((p) => stopListener(p));
+  if (stopped.length) ok(`stopped servers on ${stopped.join(', ')}`);
+  return stopped.length;
+}
+
 function stop(branch) {
   const a = find(branch);
   step(`Stopping ${a.branch}`);
+  stopServers(a);
   db(a, 'down');
   ok('database stopped; the working copy and the branch are untouched');
 }
@@ -278,6 +373,7 @@ function stop(branch) {
 function remove(branch) {
   const a = find(branch);
   step(`Removing ${a.branch}`);
+  stopServers(a);
   db(a, 'destroy');
 
   const repoPath = join(UMBRELLA, a.directory);

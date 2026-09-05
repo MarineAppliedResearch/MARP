@@ -7,7 +7,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { HARNESS_DIR, UMBRELLA, readRegistry, walk, step, ok, warn, fail, dim, cyan } from './lib.mjs';
 
@@ -28,6 +28,8 @@ function usage(code = 0) {
 
   spec check [dir]           gate G1: is the design settled? Exit 1 if not.
   spec new <task> [dir]      start .marp/task.md from the template
+  spec retire [dir]          remove the spec once its branch has merged, so it
+                             cannot be read as current on an integration branch
 
   verify plan [dir]          gate G3: draft .marp/verification.md, including the
                              requirements that have no test against them
@@ -70,6 +72,26 @@ if (group === 'spec') {
     ok(`${target} — fill in the goal, the requirements, and every assumption you are making`);
     process.exit(0);
   }
+  if (sub === 'retire') {
+    const dir = resolve(rest[0] || process.cwd());
+    const gone = [];
+    for (const name of ['task.md', 'verification.md']) {
+      const path = join(dir, '.marp', name);
+      if (!existsSync(path)) continue;
+      /* `git rm` when it is tracked, so the removal is staged and shows in the diff
+         rather than looking like a stray deleted file. */
+      const tracked = spawnSync('git', ['-C', dir, 'ls-files', '--error-unmatch', `.marp/${name}`],
+        { stdio: 'ignore' }).status === 0;
+      if (tracked) spawnSync('git', ['-C', dir, 'rm', '-q', `.marp/${name}`], { stdio: 'inherit' });
+      else rmSync(path);
+      gone.push(name);
+    }
+    if (!gone.length) { ok('nothing to retire'); process.exit(0); }
+    ok(`retired ${gone.join(' and ')}`);
+    console.log(dim('    The record lives in the merge commit, the issue, and any decision record.'));
+    process.exit(0);
+  }
+
   usage(2);
 }
 
