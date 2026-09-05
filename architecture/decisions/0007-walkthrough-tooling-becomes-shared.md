@@ -1,6 +1,6 @@
 # ADR-0007 — Narrated walkthrough tooling becomes shared
 
-- **Status:** accepted, not yet implemented
+- **Status:** accepted; implemented within marp-api, cross-repository still open
 - **Date:** 2026-09-05
 - **Scope:** marp-api, marp-video-player, video-processing-gui
 - **Refs:** MarineAppliedResearch/MARP#13
@@ -34,6 +34,16 @@ after every change; videos are produced on request.
 
 ## Consequences
 
-One implementation to maintain instead of one per application. Until the extraction is
-done, the mosaic reviewer's copy remains the reference implementation and this record is
-the statement of intent — the work itself is not yet started.
+One implementation to maintain instead of one per application.
+
+Done: `marp-api/tools/walkthrough/` holds the recorder, the runner and the narration, and
+the mosaic reviewer consumes them through two small files. Verified by recording a
+walkthrough through the extracted path. Two things had to change in the move -- `settled`
+became a callback, because knowing when a page has stopped moving cannot be guessed from
+shared code; and `test`/`expect` are passed in rather than imported, because Playwright
+only registers a test when it is the same module instance the runner loaded, and each
+application installs its own.
+
+Still open: repositories other than marp-api cannot import from that directory. Serving
+`marp-video-player` and `video-processing-gui` means publishing it as a package, since
+vendoring is the duplication this harness exists to prevent.
