@@ -10,10 +10,10 @@
  *   node sync.mjs --check    report drift and exit non-zero, changing nothing
  */
 
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  UMBRELLA, SHARED_START, SHARED_END, sharedBlock, presentRepos,
+  UMBRELLA, HARNESS_DIR, SHARED_START, SHARED_END, sharedBlock, presentRepos,
   step, ok, fail, warn, dim, normalise,
 } from './lib.mjs';
 
@@ -59,6 +59,33 @@ for (const repo of presentRepos()) {
   }
 
   writeFileSync(path, text.slice(0, from) + block + text.slice(to + SHARED_END.length), 'utf8');
+  ok(`${label} — rewritten`);
+  written++;
+}
+
+/* The hook stub is the only harness code inside a component, and it is what lets a git
+   worktree find the umbrella at all. A drifted copy means a worktree whose gates quietly
+   do nothing, which is the failure this whole check exists to prevent. */
+step(check ? 'Checking hook stubs' : 'Syncing hook stubs');
+
+const canonical = normalise(readFileSync(join(HARNESS_DIR, 'hooks', 'stub.mjs'), 'utf8'));
+
+for (const repo of presentRepos()) {
+  if (repo.name === 'marp-video-server') continue;
+  const path = join(repo.path, '.claude', 'hooks', 'gate.mjs');
+  const label = `${repo.name}/.claude/hooks/gate.mjs`;
+
+  if (existsSync(path) && normalise(readFileSync(path, 'utf8')) === canonical) {
+    ok(`${label} — in sync`);
+    continue;
+  }
+  if (check) {
+    fail(`${label} — ${existsSync(path) ? 'drifted' : 'missing'}`);
+    console.log(`         ${dim('run: marp harness install')}`);
+    drifted++;
+    continue;
+  }
+  copyFileSync(join(HARNESS_DIR, 'hooks', 'stub.mjs'), path);
   ok(`${label} — rewritten`);
   written++;
 }

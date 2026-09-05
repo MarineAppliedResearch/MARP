@@ -11,7 +11,7 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { UMBRELLA, presentRepos, readRegistry, step, ok, warn } from './lib.mjs';
+import { UMBRELLA, HARNESS_DIR, presentRepos, readRegistry, step, ok, warn } from './lib.mjs';
 
 const write = (path, content) => {
   mkdirSync(join(path, '..'), { recursive: true });
@@ -31,14 +31,15 @@ const SETTINGS = {
   hooks: {
     PreToolUse: [
       {
-        // Gate G1. The script fails open when the umbrella is not beside this repository,
-        // so a standalone clone is unaffected rather than broken.
+        // Gate G1, reached through the repository's own stub. The stub is what makes
+        // this work in a git worktree, where the umbrella is not the parent directory
+        // and the old fixed path resolved to nothing -- silently.
         matcher: 'Edit|Write|MultiEdit|NotebookEdit',
-        hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/../scripts/harness/hooks/spec-gate.mjs"' }],
+        hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.mjs" spec-gate' }],
       },
       {
         matcher: 'Bash',
-        hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/../scripts/harness/hooks/danger-gate.mjs"' }],
+        hooks: [{ type: 'command', command: 'node "$CLAUDE_PROJECT_DIR/.claude/hooks/gate.mjs" danger-gate' }],
       },
     ],
   },
@@ -126,6 +127,12 @@ for (const repo of presentRepos()) {
   mkdirSync(p('.marp'), { recursive: true });
 
   write(p('.claude', 'settings.json'), JSON.stringify(SETTINGS, null, 2) + '\n');
+  // The one piece of the harness that lives inside a component, because something has to
+  // be present locally in order to find the rest. It travels into every worktree, which is
+  // the whole reason it exists.
+  mkdirSync(p('.claude', 'hooks'), { recursive: true });
+  copyFileSync(join(HARNESS_DIR, 'hooks', 'stub.mjs'), p('.claude', 'hooks', 'gate.mjs'));
+
   write(p('.github', 'copilot-instructions.md'), copilot({ name: repo.name, default_branch: meta.default_branch }));
   write(p('.github', 'pull_request_template.md'), PR_TEMPLATE);
 
