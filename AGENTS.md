@@ -235,6 +235,9 @@ The human is the programmer; the agent is the assistant.
 The umbrella. It holds no application code — it is the registry, the cross-repository
 documentation, and the tooling that manages the workspace.
 
+`development/agentic-workflow.md` is the same loop written for the person driving:
+how to open the issue, what the gates ask of them, and what to look for at each one.
+
 ```
 services/repos.yml        the registry. Authoritative, and read by the scripts.
 scripts/marp.{ps1,sh}     clone, status, pull, doctor, db, spec, verify, worktree, harness
