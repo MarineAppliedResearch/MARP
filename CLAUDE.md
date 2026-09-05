@@ -5,6 +5,13 @@ gates, the rules that are not negotiable, how assumptions are surfaced, and the 
 doctrine. This file is the operational companion — how to build, run and test each part,
 and what currently does not work. Where the two ever disagree, `AGENTS.md` wins.
 
+@AGENTS.md
+
+<!-- The line above is not decoration: Claude Code imports that file here, so the
+     platform rules arrive with this one rather than depending on the agent choosing to
+     follow a link. A pointer is a hop, and a hop is where a hurried agent skips. -->
+
+
 This is the workspace root for the MARP ecosystem. Each subdirectory listed below is an independent Git repository. Work here when a change spans more than one component.
 
 `services/repos.yml` is the canonical registry.
