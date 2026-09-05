@@ -468,6 +468,21 @@ cmd_doctor() {
     done
     [ "$any_legacy" -eq 1 ] || pass 'none present'
 
+    head1 'Harness'
+    # Delegated rather than reimplemented: the same script runs here, in each
+    # component's CI, and from the Claude Code hooks, so there is one answer to
+    # "is this workspace consistent" instead of three that can disagree.
+    if ! command -v node >/dev/null 2>&1; then
+        warn 'node is not on PATH, so the harness checks were skipped'
+        warn 'the nvm symlink is at C:/nvm4w/nodejs; prepend it'
+    elif [ ! -f "$SCRIPT_DIR/harness/check.mjs" ]; then
+        warn 'scripts/harness/ is missing, so there is nothing to check'
+    elif node "$SCRIPT_DIR/harness/check.mjs" >/dev/null 2>&1; then
+        pass 'shared instruction blocks, instruction files and the gates'
+    else
+        fail 'harness check failed -- run: scripts/marp.sh harness check'
+    fi
+
     head1 'Umbrella working tree'
     visible=$(git -C "$REPO_ROOT" status --porcelain)
     leaked=

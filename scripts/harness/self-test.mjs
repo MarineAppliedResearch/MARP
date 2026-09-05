@@ -51,7 +51,12 @@ try {
   check('blocked spec, editing the spec', decide('spec-gate.mjs', { cwd: blocked, tool_input: { file_path: '.marp/task.md' } }), 'allow');
   check('settled spec, editing source', decide('spec-gate.mjs', { cwd: settled, tool_input: { file_path: 'src/app.js' } }), 'allow');
   check('no spec at all', decide('spec-gate.mjs', { cwd: nospec, tool_input: { file_path: 'src/app.js' } }), 'allow');
-  check('malformed payload fails open', decide('spec-gate.mjs', {}), 'allow');
+  /* `cwd` is named explicitly. An earlier version passed `{}` and relied on the hook
+     falling back to process.cwd(), which passed only for as long as the umbrella had no
+     task spec of its own — an assertion about the ambient directory dressed up as one
+     about malformed input. */
+  check('payload with no tool_input', decide('spec-gate.mjs', { cwd: nospec }), 'allow');
+  check('unparseable field types', decide('spec-gate.mjs', { cwd: settled, tool_input: { file_path: 42 } }), 'allow');
 
   step('danger-gate');
   const cmd = (command) => decide('danger-gate.mjs', { tool_input: { command } });

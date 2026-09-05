@@ -981,6 +981,25 @@ function Invoke-Doctor {
     }
     if (-not $anyLegacy) { Write-Pass 'none present' }
 
+    Write-Host 'Harness' -ForegroundColor Cyan
+    # Delegated rather than reimplemented: the same script runs here, in each
+    # component's CI, and from the Claude Code hooks, so there is one answer to
+    # "is this workspace consistent" instead of three that can disagree.
+    $harnessCheck = Join-Path $PSScriptRoot 'harness/check.mjs'
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Warn 'node is not on PATH, so the harness checks were skipped'
+        Write-Warn 'the nvm symlink is at C:/nvm4w/nodejs; prepend it'
+    } elseif (-not (Test-Path -LiteralPath $harnessCheck)) {
+        Write-Warn 'scripts/harness/ is missing, so there is nothing to check'
+    } else {
+        & node $harnessCheck *> $null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Pass 'shared instruction blocks, instruction files and the gates'
+        } else {
+            Write-Fail 'harness check failed -- run: .\scripts\marp.ps1 harness check'
+        }
+    }
+
     Write-Host 'Umbrella working tree' -ForegroundColor Cyan
     $visible = (Invoke-Git $RepoRoot @('status', '--porcelain')).Output
     $leaked = @()

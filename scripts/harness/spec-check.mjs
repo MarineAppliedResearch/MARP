@@ -29,7 +29,25 @@ const specPath = join(dir, '.marp', 'task.md');
  *
  *   - [ ] **A3 · schema · blocking** — the question
  */
-const ITEM = /^\s*-\s*\[( |x|X)\]\s*\*\*\s*([A-Za-z]+\d+)\s*(?:[·|-]\s*([a-z/-]+))?\s*(?:[·|-]\s*(blocking|non-blocking))?\s*\*\*\s*(?:[—-]\s*)?(.*)$/;
+const ITEM = /^\s*-\s*\[( |x|X)\]\s*\*\*\s*(.+?)\s*\*\*\s*(?:[—-]\s*)?(.*)$/;
+
+/**
+ * Split the bold label into id, category and whether it blocks.
+ *
+ * Parsed rather than matched by one expression, because the categories AGENTS.md lists
+ * are ordinary prose: `product/UI` has a capital, `API contract` has a space, and
+ * `scientific or data-meaning` has both. An earlier pattern accepted only lowercase and
+ * rejected `product/UI` — which the checker reported as unparseable, correctly, and which
+ * is how the bug was found.
+ */
+function parseLabel(label) {
+  const parts = label.split(/\s*[·|]\s*|\s+-\s+/).map((p) => p.trim()).filter(Boolean);
+  const id = parts.shift() || '';
+  const blockingAt = parts.findIndex((p) => /^(non-)?blocking$/i.test(p));
+  const blocking = blockingAt < 0 ? true : !/^non-/i.test(parts[blockingAt]);
+  if (blockingAt >= 0) parts.splice(blockingAt, 1);
+  return { id, category: parts.join(' · ') || 'uncategorised', blocking };
+}
 
 function parse(text) {
   const lines = normalise(text).split('\n');
@@ -56,11 +74,9 @@ function parse(text) {
       const m = ITEM.exec(lines[i]);
       if (m) {
         assumptions.push({
-          id: m[2],
-          category: m[3] || 'uncategorised',
-          blocking: (m[4] || 'blocking') === 'blocking',
+          ...parseLabel(m[2]),
           answered: m[1].toLowerCase() === 'x',
-          text: m[5].trim(),
+          text: m[3].trim(),
           line: i + 1,
         });
       } else if (/^\s*-\s*\[/.test(lines[i])) {
