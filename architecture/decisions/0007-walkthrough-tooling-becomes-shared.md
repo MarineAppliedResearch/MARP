@@ -1,8 +1,8 @@
 # ADR-0007 — Narrated walkthrough tooling becomes shared
 
-- **Status:** accepted; implemented within marp-api, cross-repository still open
+- **Status:** accepted and implemented
 - **Date:** 2026-09-05
-- **Scope:** marp-api, marp-video-player, video-processing-gui
+- **Scope:** marp-api and the applications it serves
 - **Refs:** MarineAppliedResearch/MARP#13
 
 ## Context
@@ -17,13 +17,20 @@ a walkthrough that every automated tier passed. It also carries a hard-won rule:
 that narrates a result and does not assert it can lie** — one scene passed for a week while
 excluding nothing, because it only asserted that a panel had opened.
 
-The stated goal is that this serves all UI work, and eventually produces a scripted video
-tutorial covering the whole MARP system.
+The stated goal is that this serves all of MARP's user interfaces, and eventually produces
+a scripted video tutorial of the system.
+
+**Scope, corrected 2026-09-05.** An earlier draft of this record read that as
+*cross-repository* and proposed publishing the tooling as a package so `marp-video-player`
+and `video-processing-gui` could consume it. That was an inference, and it was wrong.
+`marp-api` serves the MARP applications from `frontend/apps/`, and that is the audience:
+the tooling lives there and serves them. The video player and the annotation GUI have
+their own test arrangements and are not consumers of this.
 
 ## Decision
 
-The tooling is extracted from the mosaic reviewer so other applications and other
-repositories can use it, and so a tutorial can span components. The scenario format, the
+The tooling is extracted from the mosaic reviewer into `marp-api/tools/walkthrough/`, so
+every application `marp-api` serves can use it and a tutorial can span those applications. The scenario format, the
 caption/say/act contract, the measure-then-hold timing, and the graceful degradation when
 no speech engine is present all carry over unchanged.
 
@@ -65,6 +72,6 @@ Credentials for such a walkthrough come from the environment, never from the sce
 `marp harness check` fails on a credential in a tracked file, and a recorded sign-in is
 exactly where one would otherwise get committed.
 
-Still open: repositories other than marp-api cannot import from that directory. Serving
-`marp-video-player` and `video-processing-gui` means publishing it as a package, since
-vendoring is the duplication this harness exists to prevent.
+Nothing further is required. `marp-api` is where the applications are served from, so it is
+where the tooling belongs, and both current consumers reach it by relative path with no
+packaging step, no version to keep in step, and no second copy.
