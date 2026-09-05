@@ -61,8 +61,22 @@ in Node and miserable in sh. Node missing from `PATH` is reported the way `db` r
 .\scripts\marp.ps1 harness check        # shared blocks, instruction files, the gates
 .\scripts\marp.ps1 spec check MARP_API  # gate G1 -- is the design settled?
 .\scripts\marp.ps1 verify plan MARP_API # gate G3 -- the test plan, and what has no test
-.\scripts\marp.ps1 worktree marp-api 71-something
+.\scripts\marp.ps1 agent start marp-api 71-something
 ```
+
+### agent -- several people or agents at once
+
+`marp agent start <repo> <branch>` sets a branch up so it can run and be tested on its own:
+its own copy of the repository, its own database on its own port, its own API port, a
+written `.env`, and dependencies installed. `agent list`, `agent env`, `agent stop` and
+`agent remove` do what they say; **remove keeps the branch**, because tidying up a working
+copy and throwing away work should never be the same command.
+
+On a second machine none of this is needed -- clone, check out the branch, and it is
+already isolated. The command exists for putting several on one machine.
+
+Jellyfin is deliberately not per-agent. Everything points at the central MARP media server,
+because it holds the real library and these tests read far more than they write.
 
 `AGENTS.md` in the umbrella is the source for the rules these enforce. The design and the
 reasoning behind it are in `architecture/decisions/` and in

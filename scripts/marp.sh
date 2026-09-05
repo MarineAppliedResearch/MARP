@@ -90,7 +90,7 @@ fi
 # Node. Node not being on PATH is a routine state on a fresh shell rather than a
 # broken machine, so it is named rather than blamed on the script.
 case "${1:-}" in
-    harness|spec|verify|worktree)
+    harness|spec|verify|agent|worktree)
         if ! command -v node >/dev/null 2>&1; then
             echo "node is not on PATH. The harness commands need it." >&2
             echo "On Windows the nvm symlink is at C:/nvm4w/nodejs; prepend it." >&2

@@ -92,7 +92,7 @@
 param(
     [Parameter(Position = 0)]
     [ValidateSet('setup', 'clone', 'list', 'status', 'pull', 'doctor', 'db',
-                 'harness', 'spec', 'verify', 'worktree')]
+                 'harness', 'spec', 'verify', 'agent', 'worktree')]
     [string]$Command = 'clone',
 
     # For most commands this narrows the work to one repository. For `db` it is
@@ -1030,7 +1030,7 @@ function Invoke-Doctor {
 # Markdown and JSON, which is fine in Node and miserable here. Node missing from PATH is
 # a routine state on a shell started before nvm was installed, so it is named rather
 # than blamed on the script.
-if ($Command -in @('harness', 'spec', 'verify', 'worktree')) {
+if ($Command -in @('harness', 'spec', 'verify', 'agent', 'worktree')) {
     $cli = Join-Path $PSScriptRoot 'harness/cli.mjs'
     if (-not (Test-Path -LiteralPath $cli)) { throw "Missing $cli" }
 

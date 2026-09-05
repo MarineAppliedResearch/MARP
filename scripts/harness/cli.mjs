@@ -33,8 +33,13 @@ function usage(code = 0) {
                              requirements that have no test against them
   verify run [dir]           run the fast tiers and append real results
 
-  worktree <repo> <issue>    a new branch in its own worktree, spec seeded
-  worktree list              what is checked out where`);
+  agent start <repo> <branch>  an isolated copy on its own branch, with its own
+                               database, its own ports, a written .env and
+                               dependencies installed -- ready to run and test
+  agent list                   what is set up, and on which ports
+  agent env <branch>           print those settings again
+  agent stop <branch>          stop that agent's database, keep the work
+  agent remove <branch>        throw the working copy away, keep the branch`);
   process.exit(code);
 }
 
@@ -158,51 +163,14 @@ if (group === 'verify') {
   usage(2);
 }
 
-/* ----------------------------------------------------------------- worktree */
+/* -------------------------------------------------------------------- agent */
 
-if (group === 'worktree') {
-  const root = resolve(UMBRELLA, '..', 'marp-worktrees');
-
-  if (sub === 'list' || !sub) {
-    step('Worktrees');
-    for (const entry of readRegistry()) {
-      const repoPath = join(UMBRELLA, entry.directory);
-      if (!existsSync(join(repoPath, '.git'))) continue;
-      const r = git(['worktree', 'list'], repoPath);
-      const extra = (r.stdout || '').trim().split('\n').slice(1);
-      if (extra.length && extra[0]) {
-        console.log(cyan(`  ${entry.name}`));
-        extra.forEach((l) => console.log(`    ${l}`));
-      }
-    }
-    process.exit(0);
-  }
-
-  const [repoName, issue] = [sub, rest[0]];
-  if (!issue) { fail('usage: marp worktree <repo> <issue-branch-name>'); process.exit(2); }
-
-  const entry = readRegistry().find((e) => e.name === repoName || e.directory === repoName);
-  if (!entry) { fail(`${repoName} is not in services/repos.yml`); process.exit(2); }
-
-  const repoPath = join(UMBRELLA, entry.directory);
-  const base = entry.default_branch || 'develop';
-  const dest = join(root, entry.directory, issue);
-
-  step(`${entry.name}: ${issue} from origin/${base}`);
-  git(['fetch', 'origin', base], repoPath);
-  const add = git(['worktree', 'add', '-b', issue, dest, `origin/${base}`], repoPath);
-  if (add.status !== 0) { fail((add.stderr || '').trim()); process.exit(1); }
-  ok(dest);
-
-  mkdirSync(join(dest, '.marp'), { recursive: true });
-  copyFileSync(join(UMBRELLA, '.marp', 'task.template.md'), join(dest, '.marp', 'task.md'));
-  ok('.marp/task.md seeded — fill it in before implementing anything');
-
-  // Each worktree needs its own database, or two agents write to one. `db up` takes a
-  // port; the data directory is still fixed at the umbrella root, which is the piece
-  // that has to change before two of these can run at once on one machine.
-  warn('a second worktree on this machine needs its own database: marp db up --port 5440');
-  process.exit(0);
+if (group === 'agent' || group === 'worktree') {
+  // `worktree` kept as an alias for one release: the concept is "an agent works on its
+  // own branch, in its own copy, on its own ports", and naming it after the git feature
+  // underneath was confusing rather than descriptive.
+  process.exit(spawnSync(process.execPath, [join(HARNESS_DIR, 'agent.mjs'), ...process.argv.slice(3)],
+    { stdio: 'inherit' }).status ?? 1);
 }
 
 usage(group ? 2 : 0);
