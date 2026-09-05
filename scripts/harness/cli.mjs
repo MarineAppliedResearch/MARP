@@ -31,7 +31,8 @@ function usage(code = 0) {
 
   verify plan [dir]          gate G3: draft .marp/verification.md, including the
                              requirements that have no test against them
-  verify run [dir]           run the fast tiers and append real results
+  verify run [dir]           gate G4: run the WHOLE suite once the work is done and
+                             append the real results, failures included
 
   agent start <repo> <branch>  an isolated copy on its own branch, with its own
                                database, its own ports, a written .env and
@@ -134,11 +135,20 @@ if (group === 'verify') {
     if (!existsSync(pkg)) { fail('no package.json — run this repository\'s own tiers by hand and record the output'); process.exit(2); }
     const scripts = JSON.parse(readFileSync(pkg, 'utf8')).scripts || {};
 
-    // Only the fast tiers. Browser, database and hardware suites belong to the person
-    // working, and to gate G4 -- running them here would make this command slow enough
-    // that nobody runs it.
-    const tiers = ['lint', 'test:unit'].filter((t) => scripts[t]);
-    if (!tiers.length) { fail('no lint or test:unit script here'); process.exit(2); }
+    /*
+     * The whole suite, not the fast tiers.
+     *
+     * This is gate G4: the run that has to pass before anything is called done. Run it
+     * as often as the work needs -- it is a gate, not a budget. An earlier version ran
+     * only lint and unit tests to stay quick, which got it backwards: the quick loop is
+     * `npm run test:unit` after every change, and this is the thorough one, which has to
+     * be able to see a broken dialog.
+     */
+    const tiers = scripts.test
+      ? ['test']
+      : ['lint', 'test:unit', 'test:e2e'].filter((t) => scripts[t]);
+    if (!tiers.length) { fail('no test script here'); process.exit(2); }
+    console.log(dim('    The full suite, including the slow tiers. This is the run a human reviews.'));
 
     const lines = [];
     let failed = 0;
@@ -157,7 +167,7 @@ if (group === 'verify') {
       `\n\n### Run ${new Date().toISOString().slice(0, 16).replace('T', ' ')}\n\n` + lines.join('\n'), 'utf8');
 
     if (failed) { fail(`${failed} tier(s) failed — the output above is what goes to the human, verbatim`); process.exit(1); }
-    ok('fast tiers passed; slow tiers and manual steps are still yours to run');
+    ok('the whole suite passed; manual steps and walkthroughs are still yours to run');
     process.exit(0);
   }
   usage(2);
