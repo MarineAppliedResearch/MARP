@@ -30,6 +30,12 @@
                 umbrella cannot absorb a component.
       db        Provision and run the PostgreSQL database that marp-api needs.
                 Delegates to scripts/db.ps1 -- see `marp db` subcommands
+
+    harness     check | sync | install -- the shared instruction blocks, and the
+                checks over instruction files. Delegates to scripts/harness/.
+    spec        check | new -- the task specification and gate G1.
+    verify      plan | run -- gate G3's test plan, and the fast tiers.
+    worktree    <repo> <issue> -- a task branch in its own worktree.
                 up, down, status, env and destroy.
 
 .PARAMETER Command
@@ -85,7 +91,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('setup', 'clone', 'list', 'status', 'pull', 'doctor', 'db')]
+    [ValidateSet('setup', 'clone', 'list', 'status', 'pull', 'doctor', 'db',
+                 'harness', 'spec', 'verify', 'worktree')]
     [string]$Command = 'clone',
 
     # For most commands this narrows the work to one repository. For `db` it is
@@ -99,9 +106,16 @@ param(
     [ValidateSet('https', 'ssh')]
     [string]$Protocol = 'https',
 
+    # Everything after the subcommand, for harness/spec/verify/worktree. Collected
+    # rather than declared, because these take positional arguments of their own and
+    # binding them here would mean teaching this file about each one.
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Rest,
+
     # Passed through to scripts/db.ps1 by the `db` command.
     [int]$Port = 5432,
     [string]$Password = 'marp_dev_password',
+    [string]$DataDirName,
 
     # setup only. The first administrator's display name reaches the bootstrap
     # migration through .env, so it has to be decided before the database is
@@ -993,6 +1007,29 @@ function Invoke-Doctor {
 # The database is its own script: it is long, it is about PostgreSQL rather
 # than about repositories, and keeping it separate means neither file has to be
 # read to understand the other. `marp db <subcommand>` is the only entry point.
+# The harness commands go to Node rather than to another PowerShell script: they parse
+# Markdown and JSON, which is fine in Node and miserable here. Node missing from PATH is
+# a routine state on a shell started before nvm was installed, so it is named rather
+# than blamed on the script.
+if ($Command -in @('harness', 'spec', 'verify', 'worktree')) {
+    $cli = Join-Path $PSScriptRoot 'harness/cli.mjs'
+    if (-not (Test-Path -LiteralPath $cli)) { throw "Missing $cli" }
+
+    $node = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $node) {
+        Write-Host 'node is not on PATH. The harness commands need it.' -ForegroundColor Red
+        Write-Host 'The nvm symlink is at C:/nvm4w/nodejs; prepend it to PATH.' -ForegroundColor DarkGray
+        exit 127
+    }
+
+    $arguments = @($Command)
+    if ($Component) { $arguments += $Component }
+    if ($Rest) { $arguments += $Rest }
+
+    & node $cli @arguments
+    exit $LASTEXITCODE
+}
+
 if ($Command -eq 'db') {
     $dbScript = Join-Path $PSScriptRoot 'db.ps1'
     if (-not (Test-Path -LiteralPath $dbScript)) { throw "Missing $dbScript" }
@@ -1001,6 +1038,7 @@ if ($Command -eq 'db') {
     if ($Component) { $arguments['Command'] = $Component }
     if ($PSBoundParameters.ContainsKey('Port')) { $arguments['Port'] = $Port }
     if ($PSBoundParameters.ContainsKey('Password')) { $arguments['Password'] = $Password }
+    if ($PSBoundParameters.ContainsKey('DataDirName')) { $arguments['DataDirName'] = $DataDirName }
 
     & $dbScript @arguments
     exit $LASTEXITCODE

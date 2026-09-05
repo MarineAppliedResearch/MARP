@@ -1,0 +1,25 @@
+name: Defect
+description: Something behaves differently from how it should.
+body:
+  - type: textarea
+    id: seen
+    attributes:
+      label: What happened
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should have happened
+    validations: { required: true }
+  - type: input
+    id: where
+    attributes:
+      label: Repository and branch
+    validations: { required: true }
+  - type: markdown
+    attributes:
+      value: |
+        **This defect is not fixed until it has a named test at a tier that can observe
+        it.** A rendering fault passes every store-level check; a rule fault passes every
+        browser test that never exercises it. Reporting a fix verified at a tier that
+        structurally cannot see the fault is how the same defect gets reported twice.

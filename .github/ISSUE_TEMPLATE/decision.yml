@@ -1,0 +1,23 @@
+name: Decision to make
+description: A design or architecture question that needs settling before work starts.
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: The question
+    validations: { required: true }
+  - type: textarea
+    id: options
+    attributes:
+      label: The options, and what each costs
+    validations: { required: true }
+  - type: input
+    id: blocks
+    attributes:
+      label: What this blocks
+  - type: markdown
+    attributes:
+      value: |
+        Once settled, this becomes a decision record — `docs/decisions/` in the component,
+        or `architecture/decisions/` here when it spans repositories. The record outlives
+        the issue; the issue is where the arguing happens.

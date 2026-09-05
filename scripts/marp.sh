@@ -36,6 +36,14 @@ Commands:
   doctor    Check the workspace is sound, and in particular that the umbrella
             cannot absorb a component.
 
+  db        Manage the local development PostgreSQL. `db --help` for its own
+            options, including --port for a second worktree's database.
+  harness   check | sync | install -- the shared instruction blocks and the
+            checks over instruction files.
+  spec      check | new -- the task specification and gate G1.
+  verify    plan | run -- gate G3's test plan, and the fast tiers.
+  worktree  <repo> <issue> -- a task branch in its own worktree.
+
 Options:
   --group all|components|related   Restrict to one category. Default: all.
                                    components are part of a MARP deployment;
@@ -76,6 +84,21 @@ if [ "${1:-}" = db ]; then
     shift
     exec "$SCRIPT_DIR/db.sh" "$@"
 fi
+
+# The harness commands are delegated the same way, to Node rather than to another
+# shell script: they parse Markdown and JSON, which is miserable in sh and fine in
+# Node. Node not being on PATH is a routine state on a fresh shell rather than a
+# broken machine, so it is named rather than blamed on the script.
+case "${1:-}" in
+    harness|spec|verify|worktree)
+        if ! command -v node >/dev/null 2>&1; then
+            echo "node is not on PATH. The harness commands need it." >&2
+            echo "On Windows the nvm symlink is at C:/nvm4w/nodejs; prepend it." >&2
+            exit 127
+        fi
+        exec node "$SCRIPT_DIR/harness/cli.mjs" "$@"
+        ;;
+esac
 
 while [ $# -gt 0 ]; do
     case "$1" in
