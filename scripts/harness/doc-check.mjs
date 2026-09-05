@@ -61,9 +61,10 @@ const RULES = [
     id: 'login-pair',
     kind: 'secret',
     why: 'a login and its password, written out',
-    // The rule above would not have caught the incident that prompted all of this:
-    // `Admin login: \`admin\` / \`Something2026!\`` names no field called "password".
-    // A check that misses the case it was written for is worse than no check.
+    // The rule above matches a named field. Credentials in prose often have no field
+    // name at all -- a noun like "login" or "credentials", then a user and a secret in
+    // backticks -- so that rule alone leaves the commonest shape uncaught, and a check
+    // that misses the shape it was written for is worse than no check.
     re: /\b(?:login|credentials?|sign[- ]?in)\b[^\n]{0,24}[:=][^\n]{0,40}`[^`\s]{8,}`/i,
   },
 ];
