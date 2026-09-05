@@ -108,11 +108,12 @@ Nothing opens a PR on its own. Say so, or merge it yourself.
 
 ```bash
 marp spec retire marp-api          # the task spec dies with its branch
-marp agent remove 71-delete-confirmation
+marp agent remove 72-unrendered-states    # only if you spun one up
 ```
 
 `remove` shuts down that workspace's database and servers and deletes the copy. **It keeps
-the branch** — tidying up and throwing work away should never be the same command.
+the branch** — tidying up and throwing work away should never be the same command. If you
+worked on a branch in your own checkout, there is nothing to remove.
 
 `marp harness check` fails if a spec is left on `develop`, so forgetting is caught.
 
@@ -123,9 +124,11 @@ the branch** — tidying up and throwing work away should never be the same comm
 Parallelism belongs **after** the design is settled, never before. Two agents each
 investigating the same surface is how two incompatible interpretations get built.
 
-So: one agent settles the assumptions with you, then the work fans out. Each gets its own
-`marp agent start`. `marp harness check` reports collisions — same port fails, an exclusive
-resource named twice in `needs:` fails, two agents on one repository is a note for you.
+So: one agent settles the assumptions with you, then the work fans out. **This is where a
+separate workspace earns its cost** — parallel agents genuinely cannot share one checkout,
+one database and one set of ports. `marp harness check` reports collisions: same port
+fails, an exclusive resource named twice in `needs:` fails, two agents on one repository is
+a note for you.
 
 **Subagents inside one task** are for reading, not writing: searching a large tree,
 reviewing a diff against the requirements. Give a reviewer the requirements and the diff,
@@ -157,7 +160,7 @@ projects use for everything.
 ## The commands
 
 ```bash
-marp agent start <repo> <branch>   a branch that can run and test on its own
+marp agent start <repo> <branch>   an isolated copy -- only when you need one
 marp agent list                    what is set up, and on which ports
 marp agent stop|remove <branch>    shut it down; remove keeps the branch
 
