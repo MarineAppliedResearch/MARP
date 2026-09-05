@@ -6,10 +6,11 @@
  * reports back, and pushes the branch. Branches get merged the usual way. Nothing is
  * shared between two agents except the things that are meant to be shared.
  *
- * On one machine the isolated copy is a git worktree, which shares the object store and so
- * costs almost nothing. On a second machine it is just a normal clone on a branch — the
- * same model, and `marp agent env` prints the settings that keep it from colliding with
- * anything else.
+ * **Most tasks do not need this.** A branch in the checkout you already have costs
+ * nothing and has its dependencies installed; this builds a whole copy and runs a full
+ * `npm ci`, which is minutes. Spend that only for isolation: another agent already in
+ * that repository, or a task that will disturb the database. On a second machine a plain
+ * clone on a branch is the same thing for free.
  *
  * What is NOT isolated, on purpose:
  *

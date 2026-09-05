@@ -22,21 +22,32 @@ Three things, and no more:
 Do not write the implementation. If you already know the implementation, you are writing
 a spec, and the agent will do it faster if you say so plainly instead.
 
-## 1. Give the agent a workspace
+## 1. Put it on a branch
+
+Usually this is all it takes, in the checkout you already have:
 
 ```bash
-marp agent start marp-api 71-delete-confirmation
+git checkout -b 72-unrendered-states origin/develop
 ```
 
-It gets its own copy of the repository on that branch, its own database on its own port,
-its own API port, a written `.env` and every package installed. It cannot collide with your
-development server or with another agent.
+Dependencies are installed and the database is up, so the agent can start immediately.
 
-Then point an agent at that directory and the issue. That is all the briefing it needs —
-`AGENTS.md` is in there and tells it the rest.
+**Spend a separate workspace only when you need isolation** — it is a full clone, its own
+database on its own port, and a complete `npm ci`, so it costs minutes:
 
-> On a second computer none of this is needed. Clone, check out the branch, and it is
-> already isolated. The command exists for running several on one machine.
+```bash
+marp agent start marp-api 72-unrendered-states
+```
+
+Worth it when another agent is already working in that repository, when the task will
+disturb the database in a way you do not want in your own checkout, or when somebody wants
+to keep using the workspace normally meanwhile. Otherwise a branch is the whole answer.
+
+Then point an agent at the directory and the issue. That is all the briefing it needs —
+`CLAUDE.md` imports `AGENTS.md`, which tells it the rest.
+
+> On a second computer none of this applies. Clone, check out the branch, and it is
+> already isolated.
 
 ## 2. Answer its questions — the gate that matters most
 
