@@ -44,6 +44,27 @@ shared code; and `test`/`expect` are passed in rather than imported, because Pla
 only registers a test when it is the same module instance the runner loaded, and each
 application installs its own.
 
+**Validated by a second consumer, 2026-09-05.** A platform-level walkthrough — the entry
+page, scrolling its sections, opening the login dialog, signing in for real, and landing on
+the dashboard — was built against the extracted tooling and recorded end to end. It needed
+two files: a scenarios file and a six-line spec. That is the test that mattered, because
+one consumer proves nothing about whether a thing is actually shareable.
+
+Three things it confirmed:
+
+- `settled` being a callback was necessary, not defensive. The mosaic reviewer waits for
+  tiles with no skeletons; the entry page waits for `networkidle`. Shared code could not
+  have guessed either.
+- The refusal to write a video when the run fails is load-bearing. The first attempt failed
+  on a missing browser binary and produced no file, rather than a partial recording.
+- A scene that claims something must assert it. The sign-in scene asserts the URL actually
+  became `/apps/dashboard`, so a broken login cannot produce a convincing film of a
+  working one.
+
+Credentials for such a walkthrough come from the environment, never from the scenario file —
+`marp harness check` fails on a credential in a tracked file, and a recorded sign-in is
+exactly where one would otherwise get committed.
+
 Still open: repositories other than marp-api cannot import from that directory. Serving
 `marp-video-player` and `video-processing-gui` means publishing it as a package, since
 vendoring is the duplication this harness exists to prevent.
