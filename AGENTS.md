@@ -8,6 +8,12 @@ Every component repository carries a copy of the shared block below, between the
 markers, followed by its own repository-specific section. `marp harness check` fails when
 a copy has drifted; `marp harness sync` rewrites them from this file.
 
+**Changing the shared block is two merges, in order.** A component's CI compares its copy
+against the umbrella's *published* branch, so until the umbrella change is merged every
+component correctly reports `drifted from the umbrella` and fails. Merge the umbrella first,
+then re-run the component checks and merge those. A failure on the first attempt there is
+the check working, not a broken build.
+
 <!-- marp:shared start -->
 <!-- Canonical source: MARP/AGENTS.md. Do not edit this block in a component repository;
      edit it here and run `marp harness sync`. -->

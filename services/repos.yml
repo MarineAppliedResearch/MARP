@@ -113,7 +113,7 @@ components:
   marp-video-player:
     repository: MarineAppliedResearch/marp-video-player
     directory: marp-video-player
-    default_branch: master
+    default_branch: develop
     visibility: public
     role: Reusable JavaScript/WebCodecs video player
     runtime: Node 20+
