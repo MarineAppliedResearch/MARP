@@ -16,6 +16,37 @@ This is the workspace root for the MARP ecosystem. Each subdirectory listed belo
 
 `services/repos.yml` is the canonical registry.
 
+## Spawning an agent
+
+`AGENTS.md` carries the rules for working alongside other agents — read *Working in
+parallel* before you spawn one. This is the part that is easy to forget, so it is written
+out: **every spawn prompt starts by pointing at the harness.** An agent that has not read it
+guesses at the gates, pushes when it should not, and verifies at a tier that cannot see what
+it changed.
+
+Paste this in, filled out:
+
+```
+You are working in <repo> at <path>, on MarineAppliedResearch/<repo>#<issue>.
+
+Read these first, all of them, before touching anything:
+  - <repo>/AGENTS.md          the harness: gates, testing doctrine, permissions, and
+                              how to work alongside other agents
+  - the issue, with `gh issue view <issue>`, and the issues it references
+
+Branch from <base> — not develop, because <why>. `git fetch` first.
+
+Do not push and do not open a pull request; that is the human's gate.
+Commit as Isaac Assegai <isaac.a.travers@gmail.com>, never an assistant.
+```
+
+Then add the task itself. `AGENTS.md` lists what else to give it — the branch, the issue
+number rather than a summary, which files are being changed elsewhere, and what its report
+must contain.
+
+**Do not tell an agent to pick a default instead of stopping at a blocking assumption.**
+That converts a five-minute question into an hour of rework; it has already happened here.
+
 ## Getting the workspace
 
 `scripts/marp.ps1 setup` takes a bare clone of this repository to a running
