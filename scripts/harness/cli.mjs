@@ -8,7 +8,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, rmSync } from 'node:fs';
-import { join, resolve, basename } from 'node:path';
+import { join, resolve, basename, relative, sep } from 'node:path';
 import { HARNESS_DIR, UMBRELLA, readRegistry, walk, step, ok, warn, fail, dim, cyan } from './lib.mjs';
 
 const [group, sub, ...rest] = process.argv.slice(2);
@@ -100,9 +100,33 @@ if (group === 'spec') {
 /** Requirement ids a repository's tests actually reference. */
 function requirementsCovered(dir) {
   const covered = new Set();
+
+  /*
+   * Scoped to the files this branch changed, and that is the whole point.
+   *
+   * Requirement ids are per-task -- every spec starts at R1 -- so a repository-wide scan
+   * matches the *previous* task's R1 and reports coverage that does not exist. Run on a
+   * real branch it claimed five of nine requirements were already covered before a single
+   * test had been written for any of them, which is precisely the false confidence this
+   * gate exists to prevent.
+   */
+  const merge = spawnSync('git', ['-C', dir, 'merge-base', 'HEAD', 'origin/develop'], { encoding: 'utf8' });
+  const ref = (merge.stdout || '').trim();
+
+  let scope = null;
+  if (ref) {
+    const diff = spawnSync('git', ['-C', dir, 'diff', '--name-only', ref, 'HEAD'], { encoding: 'utf8' });
+    const dirty = spawnSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8' });
+    scope = new Set([
+      ...(diff.stdout || '').split(/\r?\n/).filter(Boolean),
+      ...(dirty.stdout || '').split(/\r?\n/).filter(Boolean).map((l) => l.slice(3).trim()),
+    ]);
+  }
+
   for (const file of walk(dir)) {
     if (!/[\\/](tests?|spec|__tests__)[\\/]/i.test(file)) continue;
     if (!/\.(m?[jt]s|py|cs)$/i.test(file)) continue;
+    if (scope && !scope.has(relative(dir, file).split(sep).join('/'))) continue;
     let text;
     try { text = readFileSync(file, 'utf8'); } catch { continue; }
     for (const m of text.matchAll(/\bR\d+\b/g)) covered.add(m[0]);

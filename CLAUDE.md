@@ -82,7 +82,13 @@ commits behind, with no `routes/` and no `db/baseline/` -- a workspace cloned
 from it cannot build its own database, which is exactly what happened.
 
 `develop` for marp-api, marp-inference-worker and video-processing-gui.
-marp-video-player and marp-jellyfin have no develop branch and stay on master.
+`develop` everywhere the harness manages, including the umbrella itself: work is pull
+requested onto `develop` and `master` is only ever reached by promoting a release.
+marp-video-player and the umbrella had no `develop` until 2026-09-09, which is why their
+pull requests were going to `master` — both were branched from `master` at that point.
+
+marp-jellyfin is the exception and stays on `master`: it is a vendor fork outside the
+harness, and its branch model is Jellyfin's rather than ours.
 
 ## The database
 
