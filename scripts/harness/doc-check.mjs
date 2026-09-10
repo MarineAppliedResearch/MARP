@@ -44,6 +44,19 @@ const RULES = [
     re: /DB_(?:HOST|PORT)\s*=\s*(?!replace|\$|\{|<|"?\s*$)[A-Za-z0-9.]/,
   },
   {
+    id: 'suite-count',
+    kind: 'stale',
+    why: 'writes a test count into prose; say how to run it, not how many there are',
+    // A count is the same class of literal as a host or a port: it goes stale silently
+    // and a reader cannot tell. This one is not hypothetical -- the umbrella said "29
+    // suites, 227 tests" while the suite was at 41 and 471, and one component file
+    // ended up carrying 227 and 41 forty lines apart.
+    //
+    // A genuine historical count -- "27 suites failing on a green codebase" -- is what
+    // the harness:allow comment and the History heading are for.
+    re: /\b\d+\s+(?:suites?|tests?|passing|failing)\b|\b\d+\s+(?:of|for)\s+\d+\s+(?:suites?|tests?)\b/,
+  },
+  {
     id: 'private-key',
     kind: 'secret',
     why: 'private key material',

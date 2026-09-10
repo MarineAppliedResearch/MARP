@@ -12,6 +12,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 
 const respond = (decision, reason) => {
   process.stdout.write(JSON.stringify({
@@ -46,6 +47,36 @@ try {
   const payload = raw.trim() ? JSON.parse(raw) : {};
   const command = payload.tool_input?.command || '';
   if (!command) respond('allow', 'nothing to inspect');
+
+  /* Committing on an integration branch.
+     AGENTS.md has said "never commit directly to master or develop" as a sentence since
+     the beginning, and a sentence did not stop it: `git checkout -b` aborts when the tree
+     is dirty, and a commit that follows without the exit status being checked lands on
+     whatever branch was already there. That happened, twice in one command, and only the
+     push being rejected for being behind kept it off GitHub.
+
+     Deliberately not in DENY: the branch is recoverable (`git branch` the commit off, then
+     reset), so this is a stop-and-look rather than a refusal. */
+  const commits = /\bgit\s+(?:-C\s+\S+\s+)?(?:-c\s+\S+\s+)*commit\b/.test(command);
+
+  if (commits) {
+    const at = /\bgit\s+-C\s+(\S+)/.exec(command);
+    const where = spawnSync('git', [...(at ? ['-C', at[1]] : []), 'branch', '--show-current'],
+      { encoding: 'utf8' });
+    const branch = (where.stdout || '').trim();
+
+    if (branch === 'develop' || branch === 'master') {
+      respond('ask', [
+        `This commits onto ${branch}, which is an integration branch.`,
+        '',
+        'AGENTS.md: your branch is yours and develop belongs to nobody. Every task',
+        'gets its own branch off develop, named for its issue.',
+        '',
+        'If a `git checkout -b` just failed -- it aborts on a dirty tree -- then this',
+        'commit is about to land in the wrong place. Check the exit status first.',
+      ].join('\n'));
+    }
+  }
 
   for (const [pattern, why] of DENY) {
     if (pattern.test(command)) {
