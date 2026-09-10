@@ -8,11 +8,24 @@ Every component repository carries a copy of the shared block below, between the
 markers, followed by its own repository-specific section. `marp harness check` fails when
 a copy has drifted; `marp harness sync` rewrites them from this file.
 
-**Changing the shared block is two merges, in order.** A component's CI compares its copy
-against the umbrella's *published* branch, so until the umbrella change is merged every
-component correctly reports `drifted from the umbrella` and fails. Merge the umbrella first,
-then re-run the component checks and merge those. A failure on the first attempt there is
-the check working, not a broken build.
+**Changing the shared block is three steps, in order**, and the middle one is the easy one
+to miss:
+
+1. Merge the change onto the umbrella's `develop`.
+2. **Promote the umbrella `develop` to `master`.**
+3. Then sync the components and merge those.
+
+Step 2 is required because a component's CI checks the umbrella out with no `ref:`, which
+gives it the umbrella's **default branch — `master`, not `develop`.** So a shared-block
+change sitting on the umbrella's `develop` is invisible to every component, and all of them
+report `drifted from the umbrella` and fail. That is the check working, not a broken build;
+it is also indistinguishable from having forgotten step 2, which is why it is written out
+here. `git show origin/master:AGENTS.md` is how to tell.
+
+This is the one case where promoting the umbrella to `master` is routine rather than a
+release: the umbrella carries no application code, only the registry, the documentation and
+the harness, so `master` there means *what the components are checked against* rather than
+what is in production.
 
 <!-- marp:shared start -->
 <!-- Canonical source: MARP/AGENTS.md. Do not edit this block in a component repository;
@@ -219,6 +232,19 @@ MARP get built. One agent settles the assumptions with the human; then the work 
 - **Do not tell it to skip the gate.** Instructing an agent to pick a default for an
   ambiguous question instead of stopping converts a five-minute question into an hour of
   rework, and it has already happened here.
+- **Scale the brief to the change.** A fifteen-line change does not need a research brief.
+  Asking for a baseline established twice, a mutation per assertion, a real-hardware run and
+  a deliberation on an edge case is right for a contract spanning two repositories and
+  absurd for adding one field — it turns minutes of work into an hour, and the agent will do
+  every part of it because you asked. Say which parts to skip. Keep the *rules* whatever the
+  size: authorship, no push, no pull request, no issues.
+- **Do not ask a question the spec already answers.** Before listing open questions for the
+  human, check `.marp/task.md` and the issue comments for the ones already settled. Sending
+  an agent to ask about a decision recorded an hour earlier wastes their time and teaches
+  them the record is not trustworthy. Note that `marp spec retire` takes the spec off the
+  integration branch once it merges, so the answers are reached with
+  `git show <task-branch>:.marp/task.md` — give an agent that command rather than letting it
+  conclude the decisions were never made.
 - **Its report is the only thing anyone sees.** Ask for what it did per requirement, real
   test output including failures, the branch and its commits, every judgement call it made,
   and anything broken it found and left alone.

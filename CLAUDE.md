@@ -146,7 +146,8 @@ The MARP API and application backend. Also serves the browser applications from 
 cd MARP_API
 npm install
 npm run dev                      # nodemon, or press F5 in VS Code
-npm test                         # 29 suites, 227 tests
+npm test                         # the whole suite; slow, for the end of a change set
+npm run test:subsystems          # the subsystems, and which suites each one owns
 npx sequelize-cli db:migrate:status
 ```
 
