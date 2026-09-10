@@ -8,11 +8,24 @@ Every component repository carries a copy of the shared block below, between the
 markers, followed by its own repository-specific section. `marp harness check` fails when
 a copy has drifted; `marp harness sync` rewrites them from this file.
 
-**Changing the shared block is two merges, in order.** A component's CI compares its copy
-against the umbrella's *published* branch, so until the umbrella change is merged every
-component correctly reports `drifted from the umbrella` and fails. Merge the umbrella first,
-then re-run the component checks and merge those. A failure on the first attempt there is
-the check working, not a broken build.
+**Changing the shared block is three steps, in order**, and the middle one is the easy one
+to miss:
+
+1. Merge the change onto the umbrella's `develop`.
+2. **Promote the umbrella `develop` to `master`.**
+3. Then sync the components and merge those.
+
+Step 2 is required because a component's CI checks the umbrella out with no `ref:`, which
+gives it the umbrella's **default branch — `master`, not `develop`.** So a shared-block
+change sitting on the umbrella's `develop` is invisible to every component, and all of them
+report `drifted from the umbrella` and fail. That is the check working, not a broken build;
+it is also indistinguishable from having forgotten step 2, which is why it is written out
+here. `git show origin/master:AGENTS.md` is how to tell.
+
+This is the one case where promoting the umbrella to `master` is routine rather than a
+release: the umbrella carries no application code, only the registry, the documentation and
+the harness, so `master` there means *what the components are checked against* rather than
+what is in production.
 
 <!-- marp:shared start -->
 <!-- Canonical source: MARP/AGENTS.md. Do not edit this block in a component repository;
