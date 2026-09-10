@@ -73,6 +73,32 @@ try {
   check('installing what is already declared', cmd('npm ci'), 'allow');
   check('running the tests', cmd('npm test'), 'allow');
   check('listing files', cmd('ls -la'), 'allow');
+
+  /* The commit guard reads the target repository's current branch, so it needs a real
+     one. Both directions are asserted: a guard that only ever asks is as useless as a
+     guard that never does. */
+  const repo = join(root, 'onabranch');
+  mkdirSync(repo, { recursive: true });
+  const git = (...args) => spawnSync('git', ['-C', repo, ...args], { encoding: 'utf8' });
+  git('init', '-q', '-b', 'develop');
+  git('config', 'user.email', 'harness@example.invalid');
+  git('config', 'user.name', 'Harness');
+  writeFileSync(join(repo, 'seed.txt'), 'seed\n');
+  git('add', 'seed.txt');
+  git('commit', '-q', '-m', 'seed');
+
+  check('committing on develop', cmd(`git -C ${repo} commit -m x`), 'ask');
+  check('committing on develop, with authorship flags',
+    cmd(`git -C ${repo} -c user.name=a -c user.email=b commit -q -m x`), 'ask');
+
+  git('checkout', '-q', '-b', '99-a-task-branch');
+  check('committing on a task branch', cmd(`git -C ${repo} commit -m x`), 'allow');
+
+  /* -B rather than -b: the fixture was initialised on develop, so master does not exist
+     yet, and a plain checkout would leave the repository on the task branch above --
+     which passed the assertion for the wrong reason until this comment existed. */
+  git('checkout', '-q', '-B', 'master');
+  check('committing on master', cmd(`git -C ${repo} commit -m x`), 'ask');
 } finally {
   rmSync(root, { recursive: true, force: true });
 }
