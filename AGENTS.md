@@ -300,9 +300,11 @@ Learned the expensive way, and it holds everywhere in this platform:
   never coverage, never the evidence that something works, and never cited in place of a
   test. Record one only when he asks for one. The assertions inside a scenario exist so a
   broken app fails instead of producing a convincing film of something that does not work —
-  that is quality control on the film, not proof of the feature. A walkthrough also *writes
-  real data*: it signs in as a real reviewer and commits real decisions, so a recording is a
-  write to the record rather than a dry run.
+  that is quality control on the film, not proof of the feature. **And it runs on test data,
+  never on real records:** a recording signs in as a real user and commits real decisions, so
+  pointed at a production or development corpus it writes to the record while demonstrating a
+  feature. Sixty review rows reached marp-api's corpus that way. Point a recording at a
+  disposable copy of the data, not the data.
 - **Run the tests that can see your change. Nothing else, and never the whole suite as a
   working loop.** Parse and unit checks cost about a second. Where a repository groups its
   suites — marp-api's `npm run test:mosaic`, `test:species` and the rest, listed by
