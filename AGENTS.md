@@ -85,13 +85,23 @@ Subject under ~72 characters plus a few one-line bullets. Reference the issue wi
 `Refs #NN`. Cross-repository work references the other side in full:
 `MarineAppliedResearch/MARP_API#68`.
 
-**Never `Closes`, `Fixes` or `Resolves`, in a commit message or a pull request body.** An
-issue is closed by a person who has decided it is done — after they have used the thing,
-not when a merge succeeds. Closing it is a judgement, and it is theirs.
+**Never `Closes`, `Fixes` or `Resolves`, in a commit message or a pull request body.** Say
+`Refs #NN` and close the issue yourself.
 
 Those keywords happen not to fire here anyway: GitHub honours them only on merges to the
 repository's *default* branch, which is `master`, while work merges to `develop`. Do not
 rely on that. It is an accident of configuration, and the rule stands on its own.
+
+**Close the issue when its pull request merges.** That is the agent's job, not something to
+hand back. `gh issue close <n> --comment "Delivered in #<pr>, merged to develop."` — one
+command, at the moment the merge succeeds, for every issue the pull request delivered.
+
+This paragraph used to say the opposite: that closing was a judgement belonging to the
+human, made after using the thing. That was wrong and it wasted his time — he had to ask
+for it repeatedly, on work that was demonstrably finished and merged. **Merged is done.**
+If a pull request did not finish an issue, say so in the pull request and leave the issue
+open with a comment explaining what is left; do not leave every issue open on the theory
+that somebody else will decide.
 
 ## The workflow, and where it stops for a human
 
