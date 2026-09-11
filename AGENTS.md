@@ -253,6 +253,11 @@ MARP get built. One agent settles the assumptions with the human; then the work 
   absurd for adding one field — it turns minutes of work into an hour, and the agent will do
   every part of it because you asked. Say which parts to skip. Keep the *rules* whatever the
   size: authorship, no push, no pull request, no issues.
+- **The agent does not end the feature; you do.** An agent runs what can see *its* change
+  and stops. The end-of-phase run belongs to whoever is supervising — one run, once, when
+  the phase is actually assembled. Letting each agent run it means running it twice for
+  nothing, and neither run is the one that counts, because the phase was not finished when
+  it happened.
 - **Name the test group, never the whole suite.** Write *"run `npm run test:mosaic`"*, not
   *"run the suite before you call it done"* — the second reads as `npm test`, and an agent
   will spend fifteen minutes on it without comment because you asked. The same goes for
