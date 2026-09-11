@@ -364,6 +364,7 @@ how to open the issue, what the gates ask of them, and what to look for at each 
 ```
 services/repos.yml        the registry. Authoritative, and read by the scripts.
 scripts/marp.{ps1,sh}     clone, status, pull, doctor, db, spec, verify, worktree, harness
+scripts/db.{ps1,sh}       up, down, status, env, dump, load, destroy
 scripts/harness/          the checks, in Node. One implementation, several callers.
 architecture/decisions/   cross-repository ADRs
 architecture/contracts.md the coupling points between repositories
@@ -379,6 +380,13 @@ no installer, no administrator rights, no VM, no container. `marp db status` rep
 yours is listening; `marp db env` prints the `DB_*` settings marp-api needs. `.env` is
 printed, never written, because that file also holds other credentials. `marp db destroy`
 throws it away.
+
+`marp db dump` copies the corpus out and `marp db load <dump> <thumbnails-dir>` puts it
+back, and they keep the same boundary: the verb is wired here, the work is marp-api's
+(#125). A load refuses by default — nothing is written without `-Apply`, and a database
+that already holds a corpus is refused until `-Force` as well. The dump carries users and
+service tokens on purpose, so it is a credential file: it stays on the machine that made
+it and is never committed.
 
 The schema belongs to marp-api, which holds the baseline and the migrations; `db up` runs
 marp-api's own scripts rather than keeping a second copy that would drift. marp-api never

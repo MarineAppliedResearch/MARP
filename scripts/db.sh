@@ -17,6 +17,12 @@
 # stops and prints those commands rather than guessing -- a running database
 # and honest instructions beat a silent half-finished one.
 #
+# The data is not this script's either, for the same reason, so `dump` and
+# `load` run marp-api's scripts/dump-corpus.js and scripts/load-corpus.js. This
+# side contributes the two things marp-api deliberately does not know: where
+# PostgreSQL's own tools are, and which database is running. Both go in as
+# environment variables -- PG_BIN and the DB_* five -- exactly as `up` does.
+#
 # POSIX counterpart of scripts/db.ps1, with one unavoidable difference. The
 # official PostgreSQL project publishes plain binary archives for Windows and
 # macOS but not for Linux, where distributions package it instead. So on macOS
@@ -55,6 +61,14 @@ COMMAND=status
 # choosing another and leaving your .env disagreeing with reality.
 PORT=5432
 PASSWORD='marp_dev_password'
+APPLY=
+FORCE=
+# dump's destination, or load's two paths. Accumulated into one string and
+# re-split by `set --` where it is used: this is POSIX sh and has no arrays, and
+# passing "$@" straight through instead would mean the loop below could no
+# longer consume --port. Paths with spaces in them are therefore not supported
+# here; the PowerShell side has real arrays and does not have the limitation.
+POSITIONAL=''
 
 usage() {
     cat <<'USAGE'
@@ -65,7 +79,12 @@ Commands:
   down      stop the server. The database is kept.
   status    what exists and what is running (default).
   env       the DB_* settings marp-api needs.
+  dump      copy the corpus out -- the database and the thumbnails both.
+  load      put a dump back. Dry run unless --apply.
   destroy   stop the server and delete the database.
+
+  dump [<destination>]
+  load <dump> <thumbnails-dir> [--apply] [--force]
 
 Options:
   --port N        TCP port. Default 5432.
@@ -73,18 +92,36 @@ Options:
                   worktree on this machine gets its own. Needs its own --port too;
                   one server cannot serve two data directories.
   --password P    Password for the database role.
+  --apply         load only. Without it a load connects, counts, says what it
+                  would destroy, and stops. There is one irreplaceable corpus on
+                  this machine and a mistyped path must not be what takes it.
+  --force         load into a database that already holds a corpus, or dump into
+                  a destination that is not empty. Separate from --apply because
+                  it answers a different question: --apply is "write at all",
+                  --force is "yes, destroy what is in there".
   -h, --help      This text.
 USAGE
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        up|down|status|env|destroy) COMMAND=$1 ;;
+        up|down|status|env|dump|load|destroy) COMMAND=$1 ;;
         --port) PORT=${2:?--port needs a value}; shift ;;
         --data-dir) INSTANCE=${2:?--data-dir needs a value}; shift ;;
         --password) PASSWORD=${2:?--password needs a value}; shift ;;
+        --apply) APPLY=--apply ;;
+        --force) FORCE=--force ;;
         -h|--help) usage; exit 0 ;;
-        *) printf 'Unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+        -*) printf 'Unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
+        # A path, but only for the two commands that take one. Anywhere else a
+        # stray word is still a typo worth refusing, which is what it was.
+        *)
+            if [ "$COMMAND" = dump ] || [ "$COMMAND" = load ]; then
+                POSITIONAL="$POSITIONAL${POSITIONAL:+ }$1"
+            else
+                printf 'Unknown argument: %s\n\n' "$1" >&2; usage >&2; exit 2
+            fi
+            ;;
     esac
     shift
 done
@@ -379,6 +416,102 @@ do_env() {
     echo ''
 }
 
+# Run one of marp-api's own scripts against this database.
+#
+# The boundary `up` already keeps, factored out so `dump` and `load` keep it too.
+# The schema and the data belong to marp-api; what this script knows and marp-api
+# deliberately does not is where PostgreSQL's own tools are and which database is
+# running. Both go in as environment variables, so marp-api still reads five DB_*
+# values and has no idea what is serving them.
+#
+# PG_BIN is the one addition. marp-api finds pg_dump through it, falling back to
+# PATH -- the same shape as FFMPEG_PATH in its config/thumbnails.js. A path into
+# .postgres/ written inside marp-api would quietly undo the fact that any other
+# PostgreSQL can be pointed at it.
+api_script() {
+    script=$1; shift
+
+    [ -f "$API_DIR/package.json" ] || { warn 'MARP_API is not cloned, so there is nothing to run.'; return 1; }
+    [ -d "$API_DIR/node_modules" ] || { warn 'MARP_API has no node_modules. Run: cd MARP_API && npm install'; return 1; }
+    [ -f "$API_DIR/$script" ] || {
+        # Named rather than left to a Node stack trace. The likeliest cause is a
+        # checkout on the wrong branch: the registry expects develop, and GitHub's
+        # default is a year behind it.
+        warn "MARP_API has no $script."
+        warn 'The registry expects develop:  cd MARP_API && git checkout develop'
+        return 1
+    }
+    command -v node >/dev/null 2>&1 || { warn 'node is not on PATH, so the script was not run.'; return 1; }
+
+    # Real environment variables rather than edits to MARP_API/.env: dotenv does
+    # not override what is already set, so these win for this one command and that
+    # repository's configuration is left exactly as written. Run from the
+    # repository root, because dotenv resolves .env against the working directory.
+    DB_HOST="$DB_HOST_ADDR" DB_PORT="$PORT" DB_NAME="$DATABASE" \
+    DB_USER="$ROLE" DB_PASSWORD="$PASSWORD" DB_DIALECT=postgres \
+    PG_BIN="$BIN_DIR" \
+    sh -c "cd '$API_DIR' && exec node '$script' \"\$@\"" sh "$@"
+}
+
+# Copy the corpus out: the database and the thumbnails both.
+#
+# Both halves, because `observation_thumbnails` records a filename and the JPEG
+# lives under marp-api's git-ignored storage/. A dump of the rows alone restores a
+# corpus whose every tile is a broken pointer -- which looks restored and is not.
+#
+# The destination is optional; marp-api defaults it into its own .marp/local/,
+# which is git-ignored. The dump carries users and service tokens on purpose, so
+# it is a credential file and stays on this machine.
+do_dump() {
+    locate_postgres || return 1
+    step 'Dumping the corpus'
+
+    is_running || {
+        warn "Nothing is running on port $PORT, so there is nothing to dump."
+        warn 'Start it with: marp.sh db up'
+        return 1
+    }
+
+    # shellcheck disable=SC2086
+    set -- $POSITIONAL
+    api_script scripts/dump-corpus.js "$@" ${FORCE:+"$FORCE"}
+}
+
+# Put a dump back, into the database that is already running.
+#
+# Two inputs because the corpus is two things -- a dump and a directory of
+# thumbnails. It imports into the database `up` provides; it does not stand up a
+# second cluster and does not touch the download under .postgres/.
+#
+# Refusing is the default, twice over: without --apply nothing is written at all,
+# and a target that already holds a corpus is refused even with --apply until
+# --force says so. There is one copy of this corpus and no backup, so a mistyped
+# path must not be what takes it.
+#
+# Stop the API first. The restore drops every table, and an open connection
+# holding a lock on one of them is what turns a load into a hang.
+do_load() {
+    locate_postgres || return 1
+    step 'Loading a corpus dump'
+
+    is_running || {
+        warn "Nothing is running on port $PORT, so there is nothing to load into."
+        warn 'Start it with: marp.sh db up'
+        return 1
+    }
+
+    # shellcheck disable=SC2086
+    set -- $POSITIONAL
+    if [ $# -lt 2 ]; then
+        warn 'Two inputs are needed: the dump, and the directory of thumbnails.'
+        warn '    marp.sh db load <dump> <thumbnails-dir> --apply'
+        warn 'MARP_API/.marp/local/corpus-dump.md records where the last dump is.'
+        return 1
+    fi
+
+    api_script scripts/load-corpus.js "$@" ${APPLY:+"$APPLY"} ${FORCE:+"$FORCE"}
+}
+
 do_destroy() {
     locate_postgres || return 1
     do_stop
@@ -394,5 +527,9 @@ case "$COMMAND" in
     down)    locate_postgres && do_stop ;;
     status)  do_status ;;
     env)     do_env ;;
+    # The only two that can fail in a way a caller needs to see: a refused load
+    # has to exit non-zero, or a script driving this cannot tell "no" from "done".
+    dump)    do_dump || exit 1 ;;
+    load)    do_load || exit 1 ;;
     destroy) do_destroy ;;
 esac

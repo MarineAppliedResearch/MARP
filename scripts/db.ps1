@@ -26,12 +26,20 @@
     guessing -- a running database and honest instructions beat a silent
     half-finished one.
 
+    The data is not this script's either, for the same reason, so `dump` and
+    `load` run marp-api's scripts/dump-corpus.js and scripts/load-corpus.js.
+    This side contributes the two things marp-api deliberately does not know:
+    where PostgreSQL's own tools are, and which database is running. It passes
+    them in as PG_BIN and the DB_* variables -- exactly as `up` already does.
+
     Commands:
 
       up        fetch, start, create the database, and load the schema.
       down      stop the server. The database is kept.
       status    what exists and what is running.
       env       the DB_* settings marp-api needs.
+      dump      copy the corpus out -- the database and the thumbnails both.
+      load      put a dump back. Dry run unless -Apply.
       destroy   stop the server and delete the database.
 
 .PARAMETER Command
@@ -60,7 +68,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('up', 'down', 'status', 'env', 'destroy')]
+    [ValidateSet('up', 'down', 'status', 'env', 'dump', 'load', 'destroy')]
     [string]$Command = 'status',
 
     [int]$Port = 5432,
@@ -75,7 +83,26 @@ param(
 
     # Set by `marp setup`, which writes marp-api's .env itself -- so printing
     # settings for someone to copy in the middle of that is just noise.
-    [switch]$Quiet
+    [switch]$Quiet,
+
+    # `load` only, and the reason it is safe to type. Without -Apply a load
+    # connects, counts, says what it would destroy, and stops. There is one
+    # irreplaceable corpus on this machine and a mistyped path must not be what
+    # takes it.
+    [switch]$Apply,
+
+    # `load` into a database that already holds a corpus, and `dump` into a
+    # destination that is not empty. A separate flag from -Apply because it
+    # answers a different question: -Apply is "write at all", -Force is "yes,
+    # destroy what is in there".
+    [switch]$Force,
+
+    # The positional arguments dump and load take -- a destination, or a dump
+    # and a thumbnails directory. Collected rather than declared, the way
+    # scripts/marp.ps1 collects them, because binding each one here would mean
+    # teaching this parameter block about every future subcommand.
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$Rest
 )
 
 $ErrorActionPreference = 'Stop'
@@ -612,6 +639,161 @@ function Invoke-Env {
     Write-Host ''
 }
 
+<#
+.SYNOPSIS
+    Run one of marp-api's own scripts against this database.
+
+.DESCRIPTION
+    The boundary `up` already keeps, factored out so `dump` and `load` keep it
+    too. The schema and the data belong to marp-api; what this script knows and
+    marp-api deliberately does not is where PostgreSQL's own tools are and which
+    database is running. Both go in as environment variables, so marp-api still
+    reads five DB_* values and has no idea what is serving them.
+
+    PG_BIN is the one addition. marp-api finds pg_dump through it, falling back
+    to PATH -- the same shape as FFMPEG_PATH in its config/thumbnails.js. A path
+    into .postgres/ written inside marp-api would quietly undo the fact that any
+    other PostgreSQL can be pointed at it.
+
+.OUTPUTS
+    System.Boolean. True when the script exited zero.
+#>
+function Invoke-ApiScript {
+    param(
+        [Parameter(Mandatory)][string]$Script,
+        [string[]]$Arguments = @()
+    )
+
+    if (-not (Test-Path -LiteralPath (Join-Path $ApiDir 'package.json'))) {
+        Write-Warn 'MARP_API is not cloned, so there is nothing to run.'
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $ApiDir 'node_modules'))) {
+        Write-Warn 'MARP_API has no node_modules. Run: cd MARP_API; npm install'
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $ApiDir $Script))) {
+        # Named rather than left to a Node stack trace. The likeliest cause is a
+        # checkout on the wrong branch: the registry expects develop, and GitHub's
+        # default is a year behind it.
+        $branch = (& git -C $ApiDir rev-parse --abbrev-ref HEAD 2>$null) -join ''
+        Write-Warn "MARP_API has no $Script. It is on branch '$branch'."
+        Write-Warn 'The registry expects develop:  cd MARP_API; git checkout develop'
+        return $false
+    }
+    if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+        Write-Warn 'node is not on PATH. It is installed via nvm-windows; a shell opened'
+        Write-Warn 'before that needs C:/nvm4w/nodejs prepended, or just open a new terminal.'
+        return $false
+    }
+
+    # Real environment variables rather than edits to MARP_API\.env: dotenv does
+    # not override what is already set, so these win for this one command and
+    # that repository's configuration is left exactly as written.
+    $environment = @{
+        DB_HOST = $DbHost; DB_PORT = "$Port"; DB_NAME = $Database
+        DB_USER = $Role;   DB_PASSWORD = $Password; DB_DIALECT = 'postgres'
+        PG_BIN  = $BinDir
+        # So the script's own messages name -Apply and -Force rather than the
+        # --apply and --force it takes directly. Telling somebody to type a flag
+        # that does not work is worse than saying nothing, and it is worst on the
+        # one command where they are already being careful.
+        MARP_CLI = 'pwsh'
+    }
+    $saved = @{}
+    foreach ($key in $environment.Keys) {
+        $saved[$key] = [Environment]::GetEnvironmentVariable($key)
+        Set-Item -Path "env:$key" -Value $environment[$key]
+    }
+
+    $previousLocation = Get-Location
+    try {
+        # From the repository root, because dotenv resolves .env against the
+        # working directory -- run from anywhere else it connects to the defaults
+        # and fails with ECONNREFUSED, which looks exactly like the database being
+        # down and is not.
+        Set-Location -LiteralPath $ApiDir
+        Invoke-Native 'node' (@($Script) + $Arguments)
+        return ($script:LastNativeExit -eq 0)
+    } finally {
+        Set-Location $previousLocation
+        foreach ($key in $environment.Keys) {
+            if ($null -eq $saved[$key]) { Remove-Item -Path "env:$key" -ErrorAction SilentlyContinue }
+            else { Set-Item -Path "env:$key" -Value $saved[$key] }
+        }
+    }
+}
+
+<#
+.SYNOPSIS
+    Copy the corpus out: the database and the thumbnails both.
+
+.DESCRIPTION
+    Both halves, because `observation_thumbnails` records a filename and the
+    JPEG lives under marp-api's git-ignored storage/. A dump of the rows alone
+    restores a corpus whose every tile is a broken pointer -- which looks
+    restored and is not.
+
+    The destination is optional; marp-api defaults it into its own .marp/local/,
+    which is git-ignored. The dump carries users and service tokens on purpose,
+    so it is a credential file and stays on this machine.
+#>
+function Invoke-Dump {
+    Write-Step 'Dumping the corpus'
+
+    if (-not (Test-Running)) {
+        Write-Warn "Nothing is running on port $Port, so there is nothing to dump."
+        Write-Warn 'Start it with: marp db up'
+        return $false
+    }
+
+    $arguments = @()
+    if ($Rest) { $arguments += $Rest }
+    if ($Force) { $arguments += '--force' }
+
+    return (Invoke-ApiScript 'scripts\dump-corpus.js' $arguments)
+}
+
+<#
+.SYNOPSIS
+    Put a dump back, into the database that is already running.
+
+.DESCRIPTION
+    Two inputs because the corpus is two things -- a dump and a directory of
+    thumbnails. It imports into the database `up` provides; it does not stand up
+    a second cluster and does not touch the download under .postgres/.
+
+    Refusing is the default, twice over: without -Apply nothing is written at
+    all, and a target that already holds a corpus is refused even with -Apply
+    until -Force says so. There is one copy of this corpus and no backup, so a
+    mistyped path must not be what takes it.
+
+    Stop the API first. The restore drops every table, and an open connection
+    holding a lock on one of them is what turns a load into a hang.
+#>
+function Invoke-Load {
+    Write-Step 'Loading a corpus dump'
+
+    if (-not (Test-Running)) {
+        Write-Warn "Nothing is running on port $Port, so there is nothing to load into."
+        Write-Warn 'Start it with: marp db up'
+        return $false
+    }
+
+    if (-not $Rest -or $Rest.Count -lt 2) {
+        Write-Warn 'Two inputs are needed: the dump, and the directory of thumbnails.'
+        Write-Warn '    marp db load <dump> <thumbnails-dir> -Apply'
+        Write-Warn 'MARP_API\.marp\local\corpus-dump.md records where the last dump is.'
+        return $false
+    }
+
+    $arguments = @($Rest)
+    if ($Apply) { $arguments += '--apply' }
+    if ($Force) { $arguments += '--force' }
+
+    return (Invoke-ApiScript 'scripts\load-corpus.js' $arguments)
+}
+
 function Invoke-Destroy {
     Invoke-Stop
     if (-not (Test-Path -LiteralPath $DataDir)) { Write-Ok 'no database to delete'; return }
@@ -629,5 +811,9 @@ switch ($Command) {
     'down'    { Invoke-Stop }
     'status'  { Invoke-Status }
     'env'     { Invoke-Env }
+    # The only two that can fail in a way a caller needs to see: a refused load
+    # has to exit non-zero, or a script driving this cannot tell "no" from "done".
+    'dump'    { if (-not (Invoke-Dump)) { exit 1 } }
+    'load'    { if (-not (Invoke-Load)) { exit 1 } }
     'destroy' { Invoke-Destroy }
 }
