@@ -253,6 +253,12 @@ MARP get built. One agent settles the assumptions with the human; then the work 
   absurd for adding one field — it turns minutes of work into an hour, and the agent will do
   every part of it because you asked. Say which parts to skip. Keep the *rules* whatever the
   size: authorship, no push, no pull request, no issues.
+- **Name the test group, never the whole suite.** Write *"run `npm run test:mosaic`"*, not
+  *"run the suite before you call it done"* — the second reads as `npm test`, and an agent
+  will spend fifteen minutes on it without comment because you asked. The same goes for
+  proving a test red: name the file. This is the single most expensive brief-writing mistake
+  made here so far, and it was made after the suite had already been split into groups for
+  exactly this reason.
 - **Do not ask a question the spec already answers.** Before listing open questions for the
   human, check `.marp/task.md` and the issue comments for the ones already settled. Sending
   an agent to ask about a decision recorded an hour earlier wastes their time and teaches
@@ -275,11 +281,23 @@ Learned the expensive way, and it holds everywhere in this platform:
 - **A test that narrates a result without asserting it can lie.** This applies to
   walkthrough videos especially: a scene that says "the tile is now excluded" and only
   asserts that a panel opened will pass for weeks while excluding nothing.
-- **Run the fast tiers after every change. Run the whole suite before calling anything
-  done.** Parse and unit checks cost about a second and are the working loop. The slow
-  tiers — browser, database, hardware — are not for routine feedback, but nothing is
-  finished until they have passed. Run them as often as the work needs; never skip them
-  to declare something working. `marp verify run` is that run.
+- **Run the tests that can see your change. Nothing else, and never the whole suite as a
+  working loop.** Parse and unit checks cost about a second. Where a repository groups its
+  suites — marp-api's `npm run test:mosaic`, `test:species` and the rest, listed by
+  `npm run test:subsystems` — **run the group you touched**, which is tens of seconds
+  against minutes for everything. A repository that has bothered to split its suite has
+  already decided this; do not go around it.
+- **One test going red needs one test file, not a suite.** Demonstrating that a tripwire
+  fails before a fix is `npx jest <file> -t '<name>'` and about ten seconds. Running a
+  whole suite to prove it, and again to prove it green, has cost this project twenty
+  minutes of an agent's run for ten seconds of information. **Never ask an agent for a
+  full-suite baseline, and never run one to establish one.**
+- **The whole suite belongs to the end of a phase, and it is the human's call.** Nothing is
+  finished until the slow tiers — browser, database, hardware — have passed, and they must
+  never be skipped to declare something working. But they are the gate on a phase, not a
+  toll on every change, and an agent should report that its targeted tiers are green and
+  **stop** rather than spend fifteen minutes nobody asked for. `marp verify run` is that
+  end-of-phase run.
 - **CI runs the fast tiers only, deliberately.** A minute of browser tests on every push
   taxes every commit. That means **CI going green is not the same as the work being
   verified** — G4 is not satisfied by a green pipeline.
