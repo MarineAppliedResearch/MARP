@@ -240,6 +240,24 @@ async function start(repoName, branch) {
       'DB_PASSWORD=marp_dev_password',
       'DB_DIALECT=postgres',
       '',
+      /*
+       * Where this workspace's observation thumbnails live (MARP_API#132).
+       *
+       * It is the value marp-api would default to anyway, and writing it is still
+       * worth doing: `observation_thumbnails` records a filename while the JPEG
+       * lives on disk, so the rows and the files are one corpus — and anything
+       * that moves them has to be told which directory goes with which database.
+       * `marp db load` now refuses to touch a second database's pictures unless it
+       * is given that directory, and this is the line that answers it.
+       *
+       * **Relative, not absolute.** marp-api resolves a relative value against its
+       * own repository root, so a workspace that is moved or copied still finds
+       * its own pictures; an absolute path baked in at creation time would point
+       * at wherever it used to be.
+       */
+      '# This workspace has its own thumbnails, under its own storage/.',
+      'THUMBNAIL_STORAGE_DIR=storage/observation-thumbnails',
+      '',
       `AUTH_SESSION_SECRET=agent-${slug(branch)}-${Math.random().toString(36).slice(2, 12)}`,
       '',
     ];
@@ -335,6 +353,10 @@ function env(branch) {
   if (existsSync(path)) { process.stdout.write(readFileSync(path, 'utf8')); return; }
   console.log(`PORT=${a.apiPort}`);
   if (a.dbPort) console.log(`DB_HOST=127.0.0.1\nDB_PORT=${a.dbPort}\nDB_NAME=mare_v1`);
+  /* The fallback for a workspace whose .env is gone, so it has to say the same
+     things `start` writes — including which thumbnails go with that database,
+     which is what `marp db load --thumbnail-dir` has to be told. */
+  console.log('THUMBNAIL_STORAGE_DIR=storage/observation-thumbnails');
 }
 
 /* -------------------------------------------------------------- stop / remove */
