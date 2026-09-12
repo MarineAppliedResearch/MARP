@@ -36,7 +36,7 @@
     spec        check | new -- the task specification and gate G1.
     verify      plan | run -- gate G3's test plan, and the fast tiers.
     worktree    <repo> <issue> -- a task branch in its own worktree.
-                up, down, status, env and destroy.
+                up, down, status, env, dump, load and destroy.
 
 .PARAMETER Command
     One of setup, clone, list, status, pull, doctor, db. Defaults to clone: it is the
@@ -82,6 +82,14 @@
     .\scripts\marp.ps1 db up
     Download, start and populate the PostgreSQL database marp-api needs.
 
+.EXAMPLE
+    .\scripts\marp.ps1 db dump
+    Copy the development corpus out -- the database and the thumbnails both.
+
+.EXAMPLE
+    .\scripts\marp.ps1 db load <dump> <thumbnails-dir> -Apply
+    Put one back. Without -Apply it says what it would do and changes nothing.
+
 .NOTES
     Author: Isaac Travers
     Windows counterpart of scripts/marp.sh. The two must stay behaviourally
@@ -96,7 +104,7 @@ param(
     [string]$Command = 'clone',
 
     # For most commands this narrows the work to one repository. For `db` it is
-    # the database subcommand -- up, down, status, env, destroy.
+    # the database subcommand -- up, down, status, env, dump, load, destroy.
     [Parameter(Position = 1)]
     [string]$Component,
 
@@ -106,9 +114,10 @@ param(
     [ValidateSet('https', 'ssh')]
     [string]$Protocol = 'https',
 
-    # Everything after the subcommand, for harness/spec/verify/worktree. Collected
-    # rather than declared, because these take positional arguments of their own and
-    # binding them here would mean teaching this file about each one.
+    # Everything after the subcommand, for harness/spec/verify/worktree, and the
+    # paths `db dump` and `db load` take. Collected rather than declared, because
+    # these take positional arguments of their own and binding them here would mean
+    # teaching this file about each one.
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$Rest,
 
@@ -116,6 +125,12 @@ param(
     [int]$Port = 5432,
     [string]$Password = 'marp_dev_password',
     [string]$DataDirName,
+
+    # `db load` and `db dump`. Declared here rather than left to $Rest so that
+    # PowerShell binds them as switches: a bare -Apply reaching db.ps1 as the
+    # string '-Apply' among the positional paths would be read as a third path.
+    [switch]$Apply,
+    [switch]$Force,
 
     # setup only. The first administrator's display name reaches the bootstrap
     # migration through .env, so it has to be decided before the database is
@@ -1058,6 +1073,12 @@ if ($Command -eq 'db') {
     if ($PSBoundParameters.ContainsKey('Port')) { $arguments['Port'] = $Port }
     if ($PSBoundParameters.ContainsKey('Password')) { $arguments['Password'] = $Password }
     if ($PSBoundParameters.ContainsKey('DataDirName')) { $arguments['DataDirName'] = $DataDirName }
+    if ($Apply) { $arguments['Apply'] = $true }
+    if ($Force) { $arguments['Force'] = $true }
+    # Positionally, after the splatted named parameters: db.ps1 collects these in
+    # its own $Rest, which is where `db dump`'s destination and `db load`'s two
+    # paths arrive.
+    if ($Rest) { $arguments['Rest'] = $Rest }
 
     & $dbScript @arguments
     exit $LASTEXITCODE
