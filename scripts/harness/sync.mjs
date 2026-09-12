@@ -13,55 +13,99 @@
 import { readFileSync, writeFileSync, existsSync, copyFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  UMBRELLA, HARNESS_DIR, SHARED_START, SHARED_END, sharedBlock, presentRepos,
+  UMBRELLA, HARNESS_DIR, SHARED_START, SHARED_END, BRAND_START, BRAND_END,
+  sharedBlock, brandBlock, presentRepos, BRANDED,
   step, ok, fail, warn, dim, normalise,
 } from './lib.mjs';
 
 const check = process.argv.includes('--check');
-const block = sharedBlock();
 
 let drifted = 0;
 let missing = 0;
 let written = 0;
 
-step(check ? 'Checking shared instruction blocks' : 'Syncing shared instruction blocks');
+/**
+ * Rewrites one marked block in one file of every repository in `repos`, from the
+ * umbrella's copy of it.
+ *
+ * Two blocks travel this way now and they are the same problem twice: the platform rules
+ * in `AGENTS.md`, and the identity and cross-links in `README.md`. Both had already
+ * diverged across this workspace before anything checked them.
+ *
+ * @param {object} spec what to sync.
+ * @param {string} spec.title what the step line says.
+ * @param {string} spec.file the file, relative to each repository root.
+ * @param {string} spec.start the opening marker.
+ * @param {string} spec.end the closing marker.
+ * @param {string} spec.block the umbrella's copy, markers included.
+ * @param {object[]} spec.repos the repositories to visit.
+ * @param {string} spec.fix the command a failure should suggest.
+ * @returns {void}
+ */
+function syncBlock({ title, file, start, end, block, repos, fix }) {
+  step(check ? `Checking ${title}` : `Syncing ${title}`);
 
-for (const repo of presentRepos()) {
-  const path = join(repo.path, 'AGENTS.md');
-  const label = `${repo.name}/AGENTS.md`;
+  for (const repo of repos) {
+    const path = join(repo.path, file);
+    const label = `${repo.name}/${file}`;
 
-  if (!existsSync(path)) {
-    // marp-jellyfin is deliberately outside the harness; anything else is a real gap.
-    if (repo.name === 'marp-video-server') { warn(`${label} — outside the harness, skipped`); continue; }
-    fail(`${label} — missing`);
-    missing++;
-    continue;
+    if (!existsSync(path)) {
+      // marp-jellyfin is deliberately outside the harness; anything else is a real gap.
+      if (repo.name === 'marp-video-server') { warn(`${label} — outside the harness, skipped`); continue; }
+      fail(`${label} — missing`);
+      missing++;
+      continue;
+    }
+
+    const text = readFileSync(path, 'utf8');
+    const from = text.indexOf(start);
+    const to = text.indexOf(end);
+
+    if (from < 0 || to < 0) {
+      fail(`${label} — no ${start} markers`);
+      missing++;
+      continue;
+    }
+
+    const current = text.slice(from, to + end.length);
+    if (normalise(current) === normalise(block)) { ok(`${label} — in sync`); continue; }
+
+    if (check) {
+      fail(`${label} — drifted from the umbrella`);
+      console.log(`         ${dim(`run: ${fix}`)}`);
+      drifted++;
+      continue;
+    }
+
+    writeFileSync(path, text.slice(0, from) + block + text.slice(to + end.length), 'utf8');
+    ok(`${label} — rewritten`);
+    written++;
   }
-
-  const text = readFileSync(path, 'utf8');
-  const from = text.indexOf(SHARED_START);
-  const to = text.indexOf(SHARED_END);
-
-  if (from < 0 || to < 0) {
-    fail(`${label} — no marp:shared markers`);
-    missing++;
-    continue;
-  }
-
-  const current = text.slice(from, to + SHARED_END.length);
-  if (normalise(current) === normalise(block)) { ok(`${label} — in sync`); continue; }
-
-  if (check) {
-    fail(`${label} — drifted from the umbrella`);
-    console.log(`         ${dim('run: marp harness sync')}`);
-    drifted++;
-    continue;
-  }
-
-  writeFileSync(path, text.slice(0, from) + block + text.slice(to + SHARED_END.length), 'utf8');
-  ok(`${label} — rewritten`);
-  written++;
 }
+
+syncBlock({
+  title: 'shared instruction blocks',
+  file: 'AGENTS.md',
+  start: SHARED_START,
+  end: SHARED_END,
+  block: sharedBlock(),
+  repos: presentRepos(),
+  fix: 'marp harness sync',
+});
+
+console.log('');
+
+syncBlock({
+  title: 'README brand blocks',
+  file: 'README.md',
+  start: BRAND_START,
+  end: BRAND_END,
+  block: brandBlock(),
+  repos: BRANDED(),
+  fix: 'marp harness sync',
+});
+
+console.log('');
 
 /* The hook stub is the only harness code inside a component, and it is what lets a git
    worktree find the umbrella at all. A drifted copy means a worktree whose gates quietly

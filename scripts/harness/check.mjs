@@ -12,6 +12,7 @@ import { HARNESS_DIR, step, ok, fail, red, green } from './lib.mjs';
 const CHECKS = [
   { name: 'shared instruction blocks', script: 'sync.mjs', args: ['--check'] },
   { name: 'instruction files', script: 'doc-check.mjs', args: [] },
+  { name: 'README branding', script: 'readme-check.mjs', args: [] },
   { name: 'the gates', script: 'self-test.mjs', args: [] },
   { name: 'task specs', script: 'spec-placement.mjs', args: [] },
   { name: 'parallel agents', script: 'agent-conflicts.mjs', args: [] },
