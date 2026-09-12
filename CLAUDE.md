@@ -100,6 +100,34 @@ database away but keeps the download; `.postgres/` is git-ignored.
 Because PostgreSQL lives inside the workspace, the workspace cannot be deleted
 while it is running. `marp db down` first.
 
+### The development database is not disposable any more
+
+**Do not run `marp db destroy`, and do not assume the database can be rebuilt.**
+It used to be true that it could; it stopped being true on 2026-09-10.
+
+It now holds a corpus that was built slowly and cannot be regenerated in an
+afternoon: **observations and keyframes from three GPU inference runs over three
+different dives of real Jellyfin video, the thumbnails extracted from that video,
+and real review decisions** made through the mosaic — some of which are the
+evidence behind recorded walkthroughs. Roughly fifteen minutes of GPU time, plus
+the Jellyfin extraction, plus the reviewing.
+
+**There is no backup.** The tooling to dump and reload it is `MARP_API#125` and is
+not built. Until it is, a destroy is permanent.
+
+Two related habits, both of which have already cost time here:
+
+- **Seed it, do not type it.** The pipeline context — project, session, model and
+  its species rows — is `MARP_API`'s `scripts/seed-inference-context.js`. That
+  script exists because these rows were once inserted by hand, lost to a destroy,
+  and had to be reconstructed from error messages. Run the seeder; do not
+  reproduce its rows from a transcript.
+- **A test must seed what it asserts.** CI builds an empty database, so a test
+  that borrows an existing row passes here and fails there — and the reverse is
+  now true as well, which is newer and less obvious: a test asserting a table is
+  empty, or counting rows across a whole table, passes only while nothing real is
+  in it. Five did, and broke the day real reviews arrived.
+
 Two boundaries worth not blurring:
 
 - **The schema belongs to marp-api**, which holds the baseline and the

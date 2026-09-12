@@ -44,11 +44,12 @@ decision; a gap that is omitted is a surprise later.
 Anything that cannot be automated — the Windows GUI, GPU inference, a real Jellyfin
 server. Written so a human can follow them exactly, with the expected result for each.
 
-## Walkthrough videos
-
-Which scenarios will be recorded and, for each, the requirement it demonstrates and the
-assertion it makes. A scene that narrates a result without asserting it can lie, so every
-scene named here has to say what it asserts.
+<!-- There is deliberately no "walkthrough videos" section here, and adding one back is a
+     mistake. A narrated walkthrough is **not a verification step and never belongs in a
+     plan** -- it is recorded only when the human specifically asks for one. A heading here
+     invited every plan to promise a video nobody had asked for, which is why it is gone.
+     The walkthroughs still assert as they go; that is about not filming a broken app, not
+     about them being evidence a phase is done. -->
 
 ---
 
