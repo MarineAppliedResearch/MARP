@@ -240,6 +240,24 @@ async function start(repoName, branch) {
       'DB_PASSWORD=marp_dev_password',
       'DB_DIALECT=postgres',
       '',
+      /*
+       * Where this workspace's observation thumbnails live (MARP_API#132).
+       *
+       * It is the value marp-api would default to anyway, and writing it is still
+       * worth doing: `observation_thumbnails` records a filename while the JPEG
+       * lives on disk, so the rows and the files are one corpus — and anything
+       * that moves them has to be told which directory goes with which database.
+       * `marp db load` now refuses to touch a second database's pictures unless it
+       * is given that directory, and this is the line that answers it.
+       *
+       * **Relative, not absolute.** marp-api resolves a relative value against its
+       * own repository root, so a workspace that is moved or copied still finds
+       * its own pictures; an absolute path baked in at creation time would point
+       * at wherever it used to be.
+       */
+      '# This workspace has its own thumbnails, under its own storage/.',
+      'THUMBNAIL_STORAGE_DIR=storage/observation-thumbnails',
+      '',
       `AUTH_SESSION_SECRET=agent-${slug(branch)}-${Math.random().toString(36).slice(2, 12)}`,
       '',
     ];
@@ -264,13 +282,25 @@ async function start(repoName, branch) {
    *
    * Copied rather than linked: an agent that writes a picture should not be writing into
    * somebody else's working copy, which is the whole point of the isolation.
+   *
+   * `observation-thumbnails/` is skipped, and it is the largest thing in there — 26 MB,
+   * 2,079 files. An agent's database is built empty (`db up` is the baseline plus the
+   * migrations, never a corpus), so those files match **zero rows** from the moment they
+   * land; and if the agent later loads a corpus, `replaceThumbnails` deletes the whole
+   * directory first anyway. So they are dead weight in both cases. They were also
+   * actively harmful: `holdsCorpus` counted files rather than rows, so a provably empty
+   * second database refused a load because of pictures belonging to a different one.
    */
   for (const runtime of ['storage']) {
     const from = join(repoPath, runtime);
     if (!existsSync(from)) continue;
     step(`${runtime}/`);
     try {
-      cpSync(from, join(dir, runtime), { recursive: true, force: true });
+      cpSync(from, join(dir, runtime), {
+        recursive: true,
+        force: true,
+        filter: (source) => !source.split(/[\\/]/).includes('observation-thumbnails'),
+      });
       const files = countFiles(join(dir, runtime));
       ok(`${files} file${files === 1 ? '' : 's'} copied — git-ignored, so a clone does not bring them`);
     } catch (error) {
@@ -335,6 +365,10 @@ function env(branch) {
   if (existsSync(path)) { process.stdout.write(readFileSync(path, 'utf8')); return; }
   console.log(`PORT=${a.apiPort}`);
   if (a.dbPort) console.log(`DB_HOST=127.0.0.1\nDB_PORT=${a.dbPort}\nDB_NAME=mare_v1`);
+  /* The fallback for a workspace whose .env is gone, so it has to say the same
+     things `start` writes — including which thumbnails go with that database,
+     which is what `marp db load --thumbnail-dir` has to be told. */
+  console.log('THUMBNAIL_STORAGE_DIR=storage/observation-thumbnails');
 }
 
 /* -------------------------------------------------------------- stop / remove */

@@ -32,6 +32,14 @@
     where PostgreSQL's own tools are, and which database is running. It passes
     them in as PG_BIN and the DB_* variables -- exactly as `up` already does.
 
+    A corpus is two things, so there is a third: -ThumbnailDir, passed as
+    THUMBNAIL_STORAGE_DIR. A load replaces a whole directory of JPEGs, and until
+    MARP_API#132 there was no way to say which one -- so a load aimed at a second
+    database with -DataDirName wrote its rows there and its pictures into the
+    default directory, which belongs to a different database. It is named rather
+    than derived: where marp-api keeps its files is marp-api's to decide, and a
+    path computed here would be a second copy of that decision.
+
     Commands:
 
       up        fetch, start, create the database, and load the schema.
@@ -57,6 +65,15 @@
     location, so two worktrees on one machine do not share one data directory.
     Pass a different -Port with it.
 
+.PARAMETER ThumbnailDir
+    Where the thumbnails belonging to this database live, for `dump` and `load`.
+    Relative paths resolve against the MARP_API repository root.
+
+    Required by `load` whenever -DataDirName is given, because a load replaces
+    the directory outright and the default one belongs to another database.
+    `dump` warns instead: it reads, so it destroys nothing, but the dump it
+    produces would carry the wrong pictures and verify anyway.
+
 .PARAMETER Password
     Password for the database role. Defaults to a well-known development
     value. The server listens only on 127.0.0.1.
@@ -80,6 +97,27 @@ param(
     # worktree needs its own data directory, not its own 300 MB download. It needs
     # its own -Port too: one server cannot serve two data directories.
     [string]$DataDirName,
+
+    # Where the thumbnails of the database being acted on live, passed to marp-api
+    # as THUMBNAIL_STORAGE_DIR (MARP_API#132). `dump` and `load` only.
+    #
+    # It exists because `observation_thumbnails` records a filename and the JPEG
+    # lives on disk, so the rows and the files are one corpus -- and a load
+    # replaces that directory wholesale. Without this, a load aimed at a second
+    # database with -DataDirName wrote its rows there and its pictures into
+    # whichever directory MARP_API\.env named, which belongs to a different
+    # database. Both halves reported success and left two databases with broken
+    # tiles.
+    #
+    # **Named, never derived.** This script could compute a path under marp-api's
+    # storage/ and pass it always, but that would make this repository a second
+    # owner of marp-api's file layout -- the drift its own db/corpus.js avoids by
+    # reading STORAGE_DIR from config/thumbnails.js rather than restating it. The
+    # boundary this script keeps is where PostgreSQL's tools are and which
+    # database is running; where marp-api puts its files is marp-api's.
+    #
+    # Unset, nothing is passed and marp-api reads its own .env exactly as before.
+    [string]$ThumbnailDir,
 
     # Set by `marp setup`, which writes marp-api's .env itself -- so printing
     # settings for someone to copy in the middle of that is just noise.
@@ -641,6 +679,32 @@ function Invoke-Env {
 
 <#
 .SYNOPSIS
+    Is this command aimed at a database other than this checkout's own?
+
+.DESCRIPTION
+    The question `dump` and `load` both have to ask before they move thumbnails,
+    and the answer turns on -DataDirName rather than on -Port.
+
+    **-Port is the wrong signal**, which is worth writing down because it is the
+    obvious one. A different port with the same data directory is the same cluster
+    reached differently, and somebody whose database sits on a non-default port
+    because 5432 was taken would meet a refusal on every single load. Two clusters
+    need two data directories, so -DataDirName is exact: it is present for every
+    second database and absent for the workspace's own. `marp agent start` passes
+    --data-dir for every workspace it creates.
+
+    `marp-api` cannot answer this. It reads five DB_* values and has no idea what
+    is serving them, which is the point.
+
+.OUTPUTS
+    System.Boolean. True when a thumbnails directory should have been named.
+#>
+function Test-SecondDatabase {
+    return [bool]$DataDirName -and -not $ThumbnailDir
+}
+
+<#
+.SYNOPSIS
     Run one of marp-api's own scripts against this database.
 
 .DESCRIPTION
@@ -700,6 +764,13 @@ function Invoke-ApiScript {
         # one command where they are already being careful.
         MARP_CLI = 'pwsh'
     }
+
+    # Only when the caller named one. An unset variable leaves marp-api reading
+    # its own .env, which is the right answer for this workspace's own database
+    # and is what every existing invocation depends on.
+    if ($ThumbnailDir) {
+        $environment['THUMBNAIL_STORAGE_DIR'] = $ThumbnailDir
+    }
     $saved = @{}
     foreach ($key in $environment.Keys) {
         $saved[$key] = [Environment]::GetEnvironmentVariable($key)
@@ -747,6 +818,19 @@ function Invoke-Dump {
         return $false
     }
 
+    # A warning rather than a refusal, because a dump reads and destroys nothing.
+    # It is still worth saying: the dump would carry the *default* directory's
+    # JPEGs beside this database's rows, and the manifest would record a file
+    # count that agrees with itself -- so the dump would verify on load and still
+    # be wrong. The graduated rule this script already uses for -Apply and -Force:
+    # the loud stop is for the half that destroys.
+    if (Test-SecondDatabase) {
+        Write-Warn "This is the '$DataDirName' database, and no -ThumbnailDir was given."
+        Write-Warn 'The rows will come from it and the thumbnails from whichever directory'
+        Write-Warn 'MARP_API\.env names -- which belongs to a different database. Pass'
+        Write-Warn '-ThumbnailDir <path> to dump the pictures that go with these rows.'
+    }
+
     $arguments = @()
     if ($Rest) { $arguments += $Rest }
     if ($Force) { $arguments += '--force' }
@@ -784,6 +868,23 @@ function Invoke-Load {
         Write-Warn 'Two inputs are needed: the dump, and the directory of thumbnails.'
         Write-Warn '    marp db load <dump> <thumbnails-dir> -Apply'
         Write-Warn 'MARP_API\.marp\local\corpus-dump.md records where the last dump is.'
+        return $false
+    }
+
+    # The refusal this parameter exists for. A load replaces the destination
+    # directory's contents outright, so aiming one at a second database without
+    # saying where that database's pictures go destroys a directory belonging to a
+    # database this command is not writing to -- and reports success twice while
+    # doing it. Nothing is run, not even the dry run, because the dry run would
+    # print the wrong directory's file count as the thing it was about to replace.
+    if (Test-SecondDatabase) {
+        Write-Warn "Refused: this is the '$DataDirName' database and no -ThumbnailDir was given."
+        Write-Warn ''
+        Write-Warn 'Nothing has been changed. A load replaces the whole thumbnails directory,'
+        Write-Warn 'and without this it would replace the one MARP_API\.env names -- which'
+        Write-Warn 'belongs to a different database. Say where this one keeps its pictures:'
+        Write-Warn '    marp db load <dump> <thumbnails-dir> -Apply -ThumbnailDir <path>'
+        Write-Warn 'A relative path resolves against the MARP_API repository root.'
         return $false
     }
 
