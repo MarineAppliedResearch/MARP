@@ -405,6 +405,7 @@ how to open the issue, what the gates ask of them, and what to look for at each 
 
 ```
 services/repos.yml        the registry. Authoritative, and read by the scripts.
+assets/marp-logo.png      the canonical logo. Every component carries a copy.
 scripts/marp.{ps1,sh}     clone, status, pull, doctor, db, spec, verify, worktree, harness
 scripts/db.{ps1,sh}       up, down, status, env, dump, load, destroy
 scripts/harness/          the checks, in Node. One implementation, several callers.
@@ -412,6 +413,22 @@ architecture/decisions/   cross-repository ADRs
 architecture/contracts.md the coupling points between repositories
 .marp/                    task and verification templates; local/ is git-ignored
 ```
+
+**Two blocks travel from here into every component**, both between markers and both
+rewritten by `marp harness sync`: the platform rules, in `AGENTS.md` between
+`marp:shared`, and the README identity, in `README.md` between `marp:brand`. The second
+is the one-line statement of what MARP is and the row of links from each repository to
+all the others.
+
+What the brand block cannot carry is checked separately, by `readme-check.mjs`: every
+repository shows `marp-logo.png` from its own copy, because a README on GitHub cannot
+reach across repositories with a relative path; the status badge is the platform cyan and
+the licence badge the platform green; and nothing links to the retired `MARE_API` name,
+which still redirects and will stop the moment somebody creates a repository with it.
+
+`marp-jellyfin` and `VIDEO_PROCESSING_GUI` are excluded from all of it, on purpose. The
+first is a vendor fork carrying Jellyfin's own README. The second is a legacy client that
+is deliberately branded MARE and is not part of a MARP deployment.
 
 **The umbrella never absorbs a component.** Every component directory is git-ignored here
 and `marp doctor` fails if the registry and `.gitignore` disagree. Adding a component means

@@ -16,6 +16,13 @@ export const UMBRELLA = resolve(HARNESS_DIR, '..', '..');
 export const SHARED_START = '<!-- marp:shared start -->';
 export const SHARED_END = '<!-- marp:shared end -->';
 
+/* The README's identity block: the one-line statement of what MARP is, and the row of
+   links from each repository to all the others. Same mechanism as the shared instruction
+   block and for the same reason -- five READMEs describing the platform five ways is what
+   this replaced. */
+export const BRAND_START = '<!-- marp:brand start -->';
+export const BRAND_END = '<!-- marp:brand end -->';
+
 /** ANSI only when something is actually watching; CI logs are worse with escape codes. */
 const tty = process.stdout.isTTY && !process.env.CI;
 const paint = (code) => (s) => (tty ? `[${code}m${s}[0m` : s);
@@ -72,14 +79,36 @@ export function presentRepos(umbrella = UMBRELLA) {
     .filter((e) => existsSync(join(e.path, '.git')));
 }
 
-/** The shared block, verbatim, markers included. */
-export function sharedBlock(umbrella = UMBRELLA) {
-  const text = readFileSync(join(umbrella, 'AGENTS.md'), 'utf8');
-  const from = text.indexOf(SHARED_START);
-  const to = text.indexOf(SHARED_END);
-  if (from < 0 || to < 0) throw new Error('AGENTS.md is missing its marp:shared markers');
-  return text.slice(from, to + SHARED_END.length);
+/** A marked block of one of the umbrella's own files, verbatim, markers included. */
+export function umbrellaBlock(file, start, end, umbrella = UMBRELLA) {
+  const text = readFileSync(join(umbrella, file), 'utf8');
+  const from = text.indexOf(start);
+  const to = text.indexOf(end);
+  if (from < 0 || to < 0) throw new Error(`${file} is missing its ${start} markers`);
+  return text.slice(from, to + end.length);
 }
+
+/** The shared instruction block, verbatim, markers included. */
+export function sharedBlock(umbrella = UMBRELLA) {
+  return umbrellaBlock('AGENTS.md', SHARED_START, SHARED_END, umbrella);
+}
+
+/** The README identity block, verbatim, markers included. */
+export function brandBlock(umbrella = UMBRELLA) {
+  return umbrellaBlock('README.md', BRAND_START, BRAND_END, umbrella);
+}
+
+/**
+ * The repositories the brand rules apply to.
+ *
+ * Two are excluded on purpose rather than by oversight. `marp-video-server` is a vendor
+ * fork of Jellyfin carrying Jellyfin's own README, and rewriting it would conflict with
+ * every upstream sync. `video-processing-gui` is a legacy client that is deliberately
+ * branded MARE: it is titled *MARE Video Processing GUI* and links to maregroup.org, and
+ * it is not part of a MARP deployment.
+ */
+export const BRANDED = (umbrella = UMBRELLA) => presentRepos(umbrella)
+  .filter((r) => r.name !== 'marp-video-server' && r.name !== 'video-processing-gui');
 
 /** Line endings differ across these repositories; comparing them is never the point. */
 export const normalise = (s) => s.replace(/\r\n/g, '\n').trimEnd();
