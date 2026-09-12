@@ -112,8 +112,11 @@ and real review decisions** made through the mosaic — some of which are the
 evidence behind recorded walkthroughs. Roughly fifteen minutes of GPU time, plus
 the Jellyfin extraction, plus the reviewing.
 
-**There is no backup.** The tooling to dump and reload it is `MARP_API#125` and is
-not built. Until it is, a destroy is permanent.
+**A destroy is still permanent, but it no longer has to be fatal.** `MARP_API#125`
+landed on 2026-09-11, so there is a way to take a copy and put it back — see
+*Copying the corpus out, and back* below. That makes `marp db dump` the thing to
+run before anything risky, and it does not make `destroy` safe: a dump you did not
+take is not a backup, and the corpus grows every time somebody reviews a page.
 
 Two related habits, both of which have already cost time here:
 
@@ -127,6 +130,36 @@ Two related habits, both of which have already cost time here:
   now true as well, which is newer and less obvious: a test asserting a table is
   empty, or counting rows across a whole table, passes only while nothing real is
   in it. Five did, and broke the day real reviews arrived.
+
+### Copying the corpus out, and back
+
+`marp db dump` takes a loadable copy of what is in the development database, and
+`marp db load <dump> <thumbnails-dir>` puts one back into the database that is
+already running. They exist because the development database holds work that
+cannot be regenerated in an afternoon and had no backup at all until #125.
+
+Four things about them, each of which is the reason for a decision rather than a
+detail:
+
+- **A dump is two things**, so a load takes two inputs. `observation_thumbnails`
+  records a filename and the JPEG lives under marp-api's git-ignored `storage/`,
+  so a dump of the rows alone restores a corpus whose every tile is a broken
+  pointer -- which looks restored and is not.
+- **A load refuses by default.** Without `-Apply` it connects, counts, says what
+  it would destroy and stops; with `-Apply` it still refuses a database that
+  already holds a corpus until `-Force`. `--apply` and `--force` from `marp.sh`.
+- **A dump is a credential file.** It carries users, `auth_identities` and
+  `service_tokens` deliberately, because without them a loaded database cannot be
+  logged into -- so it stays on the machine that made it and is never committed or
+  attached to an issue. It lands in marp-api's git-ignored `.marp/local/`, and
+  `MARP_API/.marp/local/corpus-dump.md` is where to look for the last one.
+- **The load checks its own work**, comparing what it produced against a manifest
+  written when the dump was taken. A dump that cannot be loaded is not a backup.
+
+The same boundary as the schema: the verb is wired here and the work is
+marp-api's `scripts/dump-corpus.js` and `scripts/load-corpus.js`. This side
+supplies the two things marp-api deliberately does not know -- where `pg_dump` is,
+and which database is running.
 
 Two boundaries worth not blurring:
 
