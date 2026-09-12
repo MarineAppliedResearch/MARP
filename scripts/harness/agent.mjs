@@ -282,13 +282,25 @@ async function start(repoName, branch) {
    *
    * Copied rather than linked: an agent that writes a picture should not be writing into
    * somebody else's working copy, which is the whole point of the isolation.
+   *
+   * `observation-thumbnails/` is skipped, and it is the largest thing in there — 26 MB,
+   * 2,079 files. An agent's database is built empty (`db up` is the baseline plus the
+   * migrations, never a corpus), so those files match **zero rows** from the moment they
+   * land; and if the agent later loads a corpus, `replaceThumbnails` deletes the whole
+   * directory first anyway. So they are dead weight in both cases. They were also
+   * actively harmful: `holdsCorpus` counted files rather than rows, so a provably empty
+   * second database refused a load because of pictures belonging to a different one.
    */
   for (const runtime of ['storage']) {
     const from = join(repoPath, runtime);
     if (!existsSync(from)) continue;
     step(`${runtime}/`);
     try {
-      cpSync(from, join(dir, runtime), { recursive: true, force: true });
+      cpSync(from, join(dir, runtime), {
+        recursive: true,
+        force: true,
+        filter: (source) => !source.split(/[\\/]/).includes('observation-thumbnails'),
+      });
       const files = countFiles(join(dir, runtime));
       ok(`${files} file${files === 1 ? '' : 's'} copied — git-ignored, so a clone does not bring them`);
     } catch (error) {
