@@ -47,6 +47,8 @@
       status    what exists and what is running.
       env       the DB_* settings marp-api needs.
       dump      copy the corpus out -- the database and the thumbnails both.
+      publish   upload the newest dump as a release asset, so other machines get it.
+      fetch     download the newest published dump, unless this machine has it.
       load      put a dump back. Dry run unless -Apply.
       destroy   stop the server and delete the database.
 
@@ -85,7 +87,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('up', 'down', 'status', 'env', 'dump', 'load', 'destroy')]
+    [ValidateSet('up', 'down', 'status', 'env', 'dump', 'publish', 'fetch', 'load', 'destroy')]
     [string]$Command = 'status',
 
     [int]$Port = 5432,
@@ -895,6 +897,187 @@ function Invoke-Load {
     return (Invoke-ApiScript 'scripts\load-corpus.js' $arguments)
 }
 
+<#
+.SYNOPSIS
+    Where this machine keeps its dumps, and which of them is newest.
+
+.DESCRIPTION
+    marp-api's dump script names each one for the moment it was taken, so the
+    newest is the last in sort order. Returning the directory rather than a path
+    inside it because a dump is three things -- the SQL, the manifest and a
+    directory of JPEGs -- and every caller here wants all of them.
+#>
+function Get-CorpusRoot { Join-Path $ApiDir '.marp/local/corpus' }
+
+function Get-NewestCorpus {
+    $root = Get-CorpusRoot
+    if (-not (Test-Path -LiteralPath $root)) { return $null }
+    return Get-ChildItem -LiteralPath $root -Directory |
+        Sort-Object Name |
+        Select-Object -Last 1
+}
+
+<#
+.SYNOPSIS
+    Publish the newest local dump as a release asset.
+
+.DESCRIPTION
+    The dump is the test fixture and it is meant to travel: a second machine, an
+    agent's isolated copy and a fresh clone all come up as the same environment
+    because they load the same one. This is how it gets to them.
+
+    **A release asset rather than a commit**, and that is about size rather than
+    secrecy. The dump is tens of megabytes and it changes whenever the test data
+    changes, so committing it would add that to permanent history on every
+    refresh and every clone would carry every version for ever. A release asset
+    costs the repository nothing and old ones can be deleted.
+
+    It goes on marp-api rather than here because it only loads against marp-api's
+    schema -- the manifest records the migration it was taken at, and a dump from
+    before a migration is not interchangeable with one from after. Tagging it
+    beside the code it matches is what makes that recoverable.
+#>
+function Invoke-Publish {
+    Write-Step 'Publishing the corpus dump'
+
+    $newest = Get-NewestCorpus
+    if (-not $newest) {
+        Write-Warn "No dump to publish. Take one first:  marp db dump"
+        return $false
+    }
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Write-Warn 'The GitHub CLI (gh) is not on PATH, and this needs it to upload.'
+        return $false
+    }
+
+    $manifestPath = Join-Path $newest.FullName 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        # Without it a fetched dump cannot be checked against the schema it needs,
+        # which is the one thing that makes a stale dump diagnosable rather than a
+        # confusing restore failure.
+        Write-Warn "$($newest.Name) has no manifest.json, so it cannot be published."
+        return $false
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+    $tag     = "corpus-$($newest.Name)"
+    $archive = Join-Path ([IO.Path]::GetTempPath()) "$tag.tar.gz"
+
+    Write-Step "Packing $($newest.Name)"
+    # -C so the archive holds the dump's own directory and nothing above it;
+    # extracted anywhere it lands as one self-contained folder.
+    Invoke-Native 'tar' @('-czf', $archive, '-C', (Get-CorpusRoot), $newest.Name)
+    if ($script:LastNativeExit -ne 0) { Write-Warn 'tar failed; nothing was uploaded.'; return $false }
+    Write-Ok ('{0:N0} MB packed' -f ((Get-Item -LiteralPath $archive).Length / 1MB))
+
+    $notes = @(
+        "Test corpus for MARP development workspaces.",
+        "",
+        "Taken: $($manifest.taken)",
+        "Migration head: $($manifest.migrationHead)",
+        "Observations: $($manifest.counts.observations)  Reviews: $($manifest.counts.observation_reviews)  Thumbnails: $($manifest.thumbnailFiles)",
+        "",
+        "Fetched and loaded by ``marp setup`` and ``marp agent start``. Every account in",
+        "it is a test account. Load it, then run the migrations: the dump restores the",
+        "schema as it stood at the migration head above."
+    ) -join "`n"
+
+    Write-Step "Releasing $tag"
+    Invoke-Native 'gh' @(
+        'release', 'create', $tag, $archive,
+        '--repo', 'MarineAppliedResearch/MARP_API',
+        '--title', "Test corpus $($newest.Name)",
+        '--notes', $notes
+    )
+    Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+
+    if ($script:LastNativeExit -ne 0) { Write-Warn 'The release was not created.'; return $false }
+    Write-Ok "published as $tag"
+    return $true
+}
+
+<#
+.SYNOPSIS
+    Download the newest published dump, unless this machine already has it.
+
+.DESCRIPTION
+    What makes a clone on a machine that has never seen this project able to
+    reach a mosaic page with tiles on it. `.marp/local/corpus/` is git-ignored, so
+    a clone arrives with nothing in it and every workspace before this fetched
+    nothing and came up empty.
+
+    Idempotent, and cheap when there is nothing to do: the release tag names the
+    directory it extracts to, so a dump already on disk is recognised without
+    downloading anything.
+#>
+function Invoke-Fetch-Corpus {
+    Write-Step 'Fetching the published corpus dump'
+
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        Write-Warn 'The GitHub CLI (gh) is not on PATH, and this needs it to download.'
+        Write-Warn 'Install it, or copy a dump into MARP_API\.marp\local\corpus\ by hand.'
+        return $false
+    }
+
+    # --json rather than parsing the table: the human-readable listing puts a
+    # "Latest" marker in a column that shifts, and the newest corpus release is
+    # not necessarily the newest release.
+    $listing = & gh release list --repo MarineAppliedResearch/MARP_API --limit 100 --json tagName 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $listing) {
+        Write-Warn 'Could not list releases. Is gh signed in?  gh auth status'
+        return $false
+    }
+
+    $tag = ($listing | ConvertFrom-Json |
+        Where-Object { $_.tagName -like 'corpus-*' } |
+        Sort-Object tagName |
+        Select-Object -Last 1).tagName
+
+    if (-not $tag) {
+        Write-Warn 'No corpus release has been published yet. On a machine that has one:'
+        Write-Warn '    marp db dump'
+        Write-Warn '    marp db publish'
+        return $false
+    }
+
+    $name   = $tag -replace '^corpus-', ''
+    $target = Join-Path (Get-CorpusRoot) $name
+
+    if (Test-Path -LiteralPath $target) {
+        Write-Ok "$name is already here"
+        return $true
+    }
+
+    $root = Get-CorpusRoot
+    New-Item -ItemType Directory -Path $root -Force | Out-Null
+    $staging = Join-Path ([IO.Path]::GetTempPath()) "marp-$tag"
+    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $staging -Force | Out-Null
+
+    try {
+        Write-Step "Downloading $tag"
+        Invoke-Native 'gh' @('release', 'download', $tag, '--repo', 'MarineAppliedResearch/MARP_API', '--dir', $staging)
+        if ($script:LastNativeExit -ne 0) { Write-Warn 'The download failed.'; return $false }
+
+        $archive = Get-ChildItem -LiteralPath $staging -Filter '*.tar.gz' | Select-Object -First 1
+        if (-not $archive) { Write-Warn 'That release carries no corpus archive.'; return $false }
+
+        # Extracted beside the others rather than over them: each dump is a
+        # directory named for when it was taken, and keeping the old ones is what
+        # makes going back to one possible.
+        Invoke-Native 'tar' @('-xzf', $archive.FullName, '-C', $root)
+        if ($script:LastNativeExit -ne 0) { Write-Warn 'The archive did not extract.'; return $false }
+        if (-not (Test-Path -LiteralPath $target)) {
+            Write-Warn "The archive did not contain $name."
+            return $false
+        }
+        Write-Ok "$name fetched"
+        return $true
+    } finally {
+        Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Invoke-Destroy {
     Invoke-Stop
     if (-not (Test-Path -LiteralPath $DataDir)) { Write-Ok 'no database to delete'; return }
@@ -915,6 +1098,8 @@ switch ($Command) {
     # The only two that can fail in a way a caller needs to see: a refused load
     # has to exit non-zero, or a script driving this cannot tell "no" from "done".
     'dump'    { if (-not (Invoke-Dump)) { exit 1 } }
+    'publish' { if (-not (Invoke-Publish)) { exit 1 } }
+    'fetch'   { if (-not (Invoke-Fetch-Corpus)) { exit 1 } }
     'load'    { if (-not (Invoke-Load)) { exit 1 } }
     'destroy' { Invoke-Destroy }
 }

@@ -26,7 +26,15 @@
  *   marp agent list                    what is set up, and on which ports
  *   marp agent env <branch>            print the settings again
  *   marp agent stop <branch>           stop that agent's database, keep the work
+ *   marp agent stop --all              stop every one of them
  *   marp agent remove <branch>         throw the whole thing away
+ *
+ * **Stop what you start.** `list` marks the ones still listening and says so at the end,
+ * because a server outliving its work is not untidiness: one left running in a different
+ * checkout was adopted by another workspace's browser tests, which then graded that
+ * checkout's code for an hour without saying so. `stop --all` exists because the
+ * per-branch form is the one nobody runs -- a finished agent leaves a server behind and
+ * the next person has no idea which of a dozen branches owns it.
  */
 
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -342,14 +350,42 @@ async function start(repoName, branch) {
 
 /* ---------------------------------------------------------------- list / env */
 
+/**
+ * Which of an agent's ports something is actually listening on.
+ *
+ * Listening, not the presence of a lock file. A database killed without a clean
+ * shutdown leaves `postmaster.pid` behind, so the file says "running" long after
+ * nothing is — which is how a survey of this workspace reported eleven live
+ * servers when three were up.
+ */
+function running(a) {
+  return [a.apiPort, a.dbPort, ...(a.testPorts || [])]
+    .filter(Boolean)
+    .filter((p) => listenerPid(p));
+}
+
 function list() {
   const agents = readAgents();
   step('Agents');
   if (!agents.length) { ok('none set up'); return; }
+
+  let live = 0;
   for (const a of agents) {
-    console.log(`  ${cyan(a.branch)}  ${a.repo}`);
+    const up = running(a);
+    if (up.length) live += 1;
+    console.log(`  ${cyan(a.branch)}  ${a.repo}${up.length ? `  ${cyan('running')}` : ''}`);
     console.log(`    ${a.dir}`);
     console.log(`    api ${a.apiPort}${a.dbPort ? `, database ${a.dbPort}` : ''}   ${dim(a.created.slice(0, 16).replace('T', ' '))}`);
+    if (up.length) console.log(`    ${dim(`listening on ${up.join(', ')}`)}`);
+  }
+
+  /* Said here because this listing is where somebody looks, and a server nobody
+     remembers starting is the thing that gets adopted by another checkout's tests. */
+  if (live) {
+    console.log('');
+    console.log(dim(`  ${live} still running. Stop them when the work is done:`));
+    console.log(dim('      marp agent stop <branch>      one of them'));
+    console.log(dim('      marp agent stop --all         every one'));
   }
 }
 
@@ -397,12 +433,40 @@ function stopServers(a) {
   return stopped.length;
 }
 
-function stop(branch) {
-  const a = find(branch);
+function stopOne(a) {
   step(`Stopping ${a.branch}`);
   stopServers(a);
   db(a, 'down');
   ok('database stopped; the working copy and the branch are untouched');
+}
+
+function stop(branch) {
+  stopOne(find(branch));
+}
+
+/**
+ * Stop every agent, and say how many there were.
+ *
+ * `stop <branch>` has always existed and it is the one nobody runs: a finished
+ * agent leaves a server behind and the next person has no idea which of a dozen
+ * branches owns it. This is the command you can run without knowing that.
+ *
+ * Idempotent, and quiet about the ones already down — the point is to finish with
+ * nothing running, not to report on each.
+ */
+function stopAll() {
+  const agents = readAgents();
+  if (!agents.length) { step('Agents'); ok('none set up'); return; }
+
+  const live = agents.filter((a) => running(a).length);
+  if (!live.length) {
+    step('Agents');
+    ok(`none of the ${agents.length} are running`);
+    return;
+  }
+
+  for (const a of live) stopOne(a);
+  ok(`${live.length} of ${agents.length} stopped; the working copies and branches are untouched`);
 }
 
 function remove(branch) {
@@ -438,13 +502,14 @@ if (sub === 'start') {
   if (!rest[0]) { fail('usage: marp agent env <branch>'); process.exit(2); }
   env(rest[0]);
 } else if (sub === 'stop') {
-  if (!rest[0]) { fail('usage: marp agent stop <branch>'); process.exit(2); }
-  stop(rest[0]);
+  if (rest[0] === '--all' || rest[0] === '-a') { stopAll(); }
+  else if (!rest[0]) { fail('usage: marp agent stop <branch> | --all'); process.exit(2); }
+  else { stop(rest[0]); }
 } else if (sub === 'remove') {
   if (!rest[0]) { fail('usage: marp agent remove <branch>'); process.exit(2); }
   remove(rest[0]);
 } else {
   fail(`unknown: marp agent ${sub}`);
-  console.log(dim('  start | list | env | stop | remove'));
+  console.log(dim('  start | list | env | stop [--all] | remove'));
   process.exit(2);
 }
