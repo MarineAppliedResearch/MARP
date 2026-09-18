@@ -1,178 +1,197 @@
-# Verification — MARP#132-umbrella
+---
+task: MarineAppliedResearch/MARP#<n>
+repos: [MARP, MARP_API]
+ran: 2026-09-17
+---
 
-Run 2026-09-12 in the umbrella checkout, on branch `132-thumbnail-dir-umbrella`.
+## What this covers
 
-**Nothing in this verification wrote to any database or moved any file.** Every load was
-either refused before it ran or a dry run, which `scripts/load-corpus.js` ends with
-`Dry run -- nothing written` before it reaches `pg_restore`. The four thumbnail
-directories on this machine were counted before and after every run below and are
-unchanged at 2,079 files each.
+Every requirement in `.marp/task.md` except where noted. These are workspace commands
+rather than a test suite, so the evidence is a real run against a real database in each
+case — a scratch one where the run is destructive, this machine's own where it is not.
 
-## What each test proves
+**Not covered, and deliberately:** CI. The dump does not reach it and the browser tier
+does not run there; see *Out of scope* in the task. Nothing here asserts anything about
+a GitHub runner.
 
-| Requirement | Test | Tier | Proves |
-| --- | --- | --- | --- |
-| R1 | `db load … -Port -DataDirName -ThumbnailDir`, dry run | real invocation | the variable reaches marp-api: the report counts the *named* directory, not the default |
-| R1 | `marp.sh db load … --thumbnail-dir`, dry run | real invocation | the POSIX side does the same |
-| R2 | `db load <dump> <thumbs>` with no new flags, dry run | real invocation | the ordinary invocation is unchanged and meets marp-api's own refusal as before |
-| R2 | `marp.sh db load <dump> <thumbs>`, dry run | real invocation | same on the POSIX side |
-| R3 | `db load … -DataDirName` with no `-ThumbnailDir` | real invocation | refused, names the flag, nothing run |
-| R3 | `marp.sh db load … --data-dir` with no `--thumbnail-dir` | real invocation | same |
-| R4 | code + the `second_database` predicate | reading | `dump` warns and continues — **not run against a second database, see below** |
-| R5, R6 | `node --check`, `agent list`, `agent env` | parse + run | the module still loads and runs; the generated content is **not** proven — see *Requirements with no test* |
-| R7 | `node scripts/harness/check.mjs` | harness | exit 0 |
+## R1 — setup loads the dump
 
-Both scripts were parse-checked before anything was run: `bash -n scripts/db.sh`, and
-`[Parser]::ParseFile` for `scripts/db.ps1`.
-
-## Real results, verbatim
-
-### R3 — the refusal, which is the whole point
+Setup itself was not run end to end, because it clones five repositories over a
+connection and rebuilds a workspace that is already here. The three steps it performs
+were run individually against a scratch database instead, which is the same sequence with
+the clone and the `npm install` removed.
 
 ```
-> powershell -File scripts/db.ps1 load <dump> <thumbs> -Port 5451 -DataDirName MARP_API--157-retire-fixture
-
-==> Loading a corpus dump
-    Refused: this is the 'MARP_API--157-retire-fixture' database and no -ThumbnailDir was given.
-
-    Nothing has been changed. A load replaces the whole thumbnails directory,
-    and without this it would replace the one MARP_API\.env names -- which
-    belongs to a different database. Say where this one keeps its pictures:
-        marp db load <dump> <thumbnails-dir> -Apply -ThumbnailDir <path>
-    A relative path resolves against the MARP_API repository root.
+marp db up      -Port 5481 -DataDirName setup-verify
+marp db load    <dump> <tiles> -Apply -Port 5481 -DataDirName setup-verify -ThumbnailDir <scratch>
+marp db up      -Port 5481 -DataDirName setup-verify        # migrate forward
 ```
 
-**That exact invocation is the one that used to destroy the development corpus's
-pictures** while writing an agent database's rows.
-
-The POSIX side, same invocation shape:
+Built empty, then:
 
 ```
-==> Loading a corpus dump
-    Refused: this is the 'MARP_API--157-retire-fixture' database and no --thumbnail-dir was given.
+In it now:            0 observations   0 keyframes   0 thumbnails
+In the dump:       2091 observations  29663 keyframes  2090 thumbnails  873 reviews
+Loaded:            2091 observations  29663 keyframes  2090 thumbnails  873 reviews
+Round trip verified: every count matches the manifest.
 ```
 
-### R1 — the variable actually arrives
-
-A probe directory holding **3** files, against a default holding 2,079, so the two cannot
-be confused:
+Then `No migrations were executed, database schema was already up to date.` — the dump is
+current, so the third step is the no-op it should be. Queried afterwards:
 
 ```
-> ... -DataDirName MARP_API--157-retire-fixture -ThumbnailDir <probe>
-
-         3  thumbnail files
-
-Note: no rows here, but 3 thumbnail files are on disk.
-They are orphans -- nothing in mare_v1 names them -- and a load
-replaces them. Their directory is C:\...\scratchpad\thumbs-probe
-(THUMBNAIL_STORAGE_DIR, or its default). If that is not the directory you
-meant, stop now: the rows that name these files are in another database.
-
-Dry run -- nothing written.
+2091 observations | 873 reviews | 2090 thumbnails | 35 users | 2 auth_identities | 854 species
 ```
 
-marp-api names the probe directory and counts its three files. Without the flag it reports
-2,079 and names the default. The POSIX side prints the same three lines.
+2,079 thumbnail files landed in the scratch directory. The main workspace's directory was
+unchanged at 2,079 — which is the `-ThumbnailDir` isolation working, and the reason the
+scratch run proves anything.
 
-### R2 — the ordinary invocation is untouched
+Scratch database destroyed afterwards.
 
-```
-> powershell -File scripts/db.ps1 load <dump> <thumbs>          # no new flags
+**Gap, stated rather than hidden:** the migrate-forward step was exercised only in its
+no-op form, because no migration has landed since the dump was taken. The branch that
+actually applies migrations after a load has not been run.
 
-      2079  thumbnail files
+## R2 — agent start loads the dump
 
-Refused: this database already holds a corpus, and a load replaces it.
-...
-If you really do mean to replace what is in there, say so: -Force
-```
+`marp agent start marp-api corpus-load-trial` — **result pending at the time of writing.**
+This is the one requirement whose verification had not finished. It must not be marked
+done from the fact that the code resembles R1's.
 
-No new refusal fires; it reaches marp-api's own guard exactly as before, reading the
-default directory. The POSIX run produced the same, ending `--force`.
+## R3 — an existing database is kept
 
-### The POSIX side failed first, and the failure is worth keeping
-
-```
-/c/.../scripts/db.sh: line 462: THUMBNAIL_STORAGE_DIR=/c/.../thumbs-probe: No such file or directory
-```
-
-Written as `${THUMBNAIL_DIR:+THUMBNAIL_STORAGE_DIR="$THUMBNAIL_DIR"}` in the command
-prefix. **A command-prefix assignment has to be literal**: that expansion does not
-conditionally set a variable, it produces a word the shell then runs as the command. It is
-now an `export` inside a subshell — `if` rather than `&&`, because `set -eu` is on and a
-false `&&` chain would end the subshell. The reason is written into the code.
-
-The PowerShell side never had this: it builds a hashtable and adds a key.
-
-### R7 — the harness
+`marp db up` against a database that already exists:
 
 ```
-> node scripts/harness/check.mjs
-...
-==> Harness check
-harness check exit: 0
+database mare_v1 already exists
+schema already present, so the baseline was not reapplied
 ```
 
-### Nothing moved
+`marp db fetch` run twice:
 
 ```
-MARP_API: 2079
-MARP_API--151-phone-top-chrome: 2079
-MARP_API--157-retire-fixture: 2079
-MARP_API--137-commit-marked-pager: 2079
+20260917-171643 fetched
+20260917-171643 is already here
 ```
 
-Counted after every run above.
+## R4 — the suites run against a copy
 
-## Requirements with no test
+Satisfied structurally rather than by a new mechanism: R1 and R2 make every workspace
+database a load of the published dump, and the suites read `DB_*` as they always have.
+A2 settled that there is one database per workspace and the tests write to it.
 
-- **R4, the `dump` warning.** The predicate and the message are shared with the `load`
-  refusal, which is exercised on both platforms, but the warning itself was not triggered
-  against a second database. Doing it means running a real `dump` of an agent's database,
-  which writes a dump directory and reads 26 MB — harmless but not nothing, and one of
-  those agents is being worked in.
-- **R5 and R6, the generated `.env`.** The two lines added to `agent.mjs` are proven to
-  parse and the module still runs (`agent list`, `agent env`), but **no `.env` was
-  generated by a real `marp agent start`**, because that creates a fourth PostgreSQL
-  cluster, a new branch in marp-api, an 82 MB `storage/` copy and a full `npm ci` — with
-  an agent actively working in one of the existing workspaces. The next real
-  `marp agent start` proves it for free; what to look for is a
-  `THUMBNAIL_STORAGE_DIR=storage/observation-thumbnails` line under the `DB_*` block.
-  The three existing workspaces predate the change and correctly do not have it: their
-  `.env` is silent and marp-api's default is that same value.
+The half that needed work is the suite that wrote to rows it did not own — see R4b.
 
-## Edge cases
+**Not verified:** that a workspace built only by `marp setup` runs the suite green. That
+needs a from-scratch setup, which is the same run R1's gap describes.
 
-- **`-Port` alone is not a second database.** A different port with the same data
-  directory is the same cluster reached differently, so the refusal keys on
-  `-DataDirName`. Somebody whose database sits on a non-default port because 5432 was
-  taken meets no refusal — verified by the R2 run, which used neither flag.
-- **A relative `-ThumbnailDir`** resolves against the MARP_API repository root, not the
-  working directory, because that is what marp-api does with the variable. The messages
-  say so.
-- **An absolute `-ThumbnailDir`** is used as given — the R1 run used one.
-- **`db up` is not given the variable**, deliberately: it runs `init-database.js` and
-  `db:migrate`, neither of which writes an observation thumbnail.
+## R4b — a suite may not take a queued row it did not create
 
-## Regression coverage
+The defect that started this: `npm run test:mosaic` failed with
 
-The failure this branch exists to prevent has no automated test anywhere — these are shell
-scripts and this repository has no test harness for them. The R3 runs above are the
-evidence, and they are the exact invocation that previously did the damage. If that ever
-needs to be a real test, the cheap version is a dry run asserting which directory the
-report names.
+```
+observation_thumbnails: 1 row(s) deleted that the suite did not create (2091 -> 2090)
+```
 
-## Known gaps
+Observation 920 — a real row, written 2026-09-10 — lost its thumbnail record. Cause:
+`stop` is `discardQueue()`, one unscoped `DELETE FROM observation_thumbnails WHERE
+status = 'queued'`, and `tests/thumbnails.test.js` calls it twice.
 
-- **`marp setup`'s `Set-ApiEnvironment` is unchanged** (A3). The main checkout's default is
-  already correct and `setup` rewrites somebody's real configuration file.
-- **The sweep for other `DB_*` handoffs found four sites and no others**: `db.ps1`'s
-  `Invoke-LoadSchema` and `Invoke-ApiScript`, and `db.sh`'s `load_schema` and `api_script`.
-  `marp.ps1` touches `DB_*` only in `Set-ApiEnvironment`; `marp.sh` has no `setup` and no
-  equivalent. `agent.mjs` writes the `.env`. Nothing else runs a marp-api script with a
-  database in its environment.
-- **`marp-api (develop) carries .marp/task.md` is still true**, and the harness is green
-  only because that checkout is currently on another branch — `spec-placement.mjs:46`
-  skips a repository whose checked-out branch is not an integration branch. The file is
-  still tracked on `develop` (`git ls-tree develop -- .marp/task.md`), so the failure
-  returns the moment somebody checks that repository back onto develop. Retiring it means
-  committing on another repository's `develop`, which is not this branch's to do.
+Reproduced deliberately before the fix by re-enqueuing 920, then:
+
+| run | result |
+|---|---|
+| before the fix | `1 row(s) deleted that the suite did not create` |
+| first attempt (columns) | `row(s) modified, count unchanged at 2091` — timestamptz lost its microseconds through a JS Date |
+| after the jsonb round trip | `81 passed, 0 failed` |
+
+Observation 920 afterwards, with its original `requested_at` intact:
+
+```
+920 | queued | 2026-09-18T00:38:40.906Z | candidate_index 0 | request_priority 0
+total thumbnail rows: 2091
+```
+
+Then the whole group: `npm run test:mosaic` → **7 suites passed, 274 tests passed**.
+
+The middle row of that table is the point. The first fix restored the row and still
+failed, and only the guard caught the difference — a restore that looks right and is
+wrong by a fraction of a millisecond is exactly what this guard exists for.
+
+## R5 — dump refreshes the master copy
+
+`marp db dump` against this machine's database:
+
+```
+2091 observations | 29663 keyframes | 2090 thumbnails | 873 reviews | 61 gpu_jobs
+2079 thumbnail files
+-> .marp/local/corpus/20260917-171643
+```
+
+873 reviews against the previous dump's 555, so it picked up work done since.
+
+## R6 — doctor reports what the dump lacks
+
+Both branches were run, because a warning nobody has watched fire is not a warning.
+
+Against the current dump:
+
+```
+Work the dump does not have
+  ok    nothing here that 20260917-171643 does not have
+```
+
+Against the older 2026-09-12 dump, reached by moving the newest aside:
+
+```
+Work the dump does not have
+  note  this database is ahead of 20260912-165442: observation_reviews +318
+         Keep it with:  marp db dump   then   marp db publish
+```
+
+873 − 555 = 318. A note, not a failure — `doctor`'s exit code was unchanged by it.
+
+## R7 — a non-local database is still refused
+
+Untouched by this work. `tests/setup/local-database-guard.js` has its own test and
+neither was modified; `git diff` over this branch shows no change to either file.
+
+## R8 — a fresh clone can fetch the dump
+
+Published, then the local copies were moved aside so `fetch` had to go and get it:
+
+```
+marp db publish   ->  corpus-20260917-171643
+                      https://github.com/MarineAppliedResearch/MARP_API/releases/tag/corpus-20260917-171643
+(local corpus/ moved away)
+marp db fetch     ->  Downloading corpus-20260917-171643
+                      20260917-171643 fetched
+```
+
+What came down: `corpus.dump`, `manifest.json`, and 2,079 thumbnail files — 29 MB,
+complete. The older local dumps were put back afterwards and all four are on disk.
+
+## Defects found and fixed while verifying
+
+- **`marp db load` could not reach a second database at all.** `-ThumbnailDir` existed on
+  `db.ps1` and was never declared on the `marp` wrapper, so the flag was dropped and every
+  load into a `-DataDirName` database refused — while `MARP_API/AGENTS.md` said to run
+  exactly that command. Found by R1's scratch run failing. Fixed in both scripts and the
+  paragraph corrected.
+- **`Invoke-Counts` returned an array.** `Write-Output` followed by `return $true` makes a
+  PowerShell function return both — the trap `CLAUDE.md` documents, walked into anyway.
+  Caught by reading, before it shipped.
+- **An array passed positionally does not spread into `ValueFromRemainingArguments`.** The
+  table names arrived as one item, the identifier filter dropped them, and `doctor`
+  reported "the database is not running" against a running database. Splatted now.
+
+## Left alone, and why
+
+- 16 stopped agent data directories, roughly 1.4 GB. `marp agent remove` clears them but
+  throws away working copies, which is a person's decision.
+- `marp-inference-worker-0.1.0-windows-x64-setup.exe`, 69 MB, untracked in the workspace
+  root. `marp doctor` is red for it. It is a build artifact, not this task's.
+- `marp harness check` is red: the shared block in `MARP/AGENTS.md` changed, so all four
+  components report drift until the umbrella reaches `master` and `marp harness sync` runs.
+  That is the documented three-step, not a break.

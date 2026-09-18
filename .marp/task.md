@@ -1,7 +1,7 @@
 ---
 task: MarineAppliedResearch/MARP#<n>
 repos: [MARP, MARP_API]
-status: design
+status: verifying
 needs: []
 ---
 
@@ -70,15 +70,16 @@ existing doctrine that CI runs the fast tiers only and that a green pipeline is 
   CI is not a consumer: it does not get the dump and does not run the browser tier
   (see *Out of scope*).
 
-- [ ] **A4 · behavioural** — R6's "holds work the dump does not": is comparing row counts
-  per table enough to be useful, or do you want it to name what is new (this many
-  observations, this many reviews)? Counts are a few lines; naming them is a query per
-  table. Not blocking — I will start with counts.
+- [x] **A4 · behavioural** — answered 2026-09-17: **counts per table**, not named rows.
+  `doctor` reports `observation_reviews +318` rather than listing the reviews, which is
+  enough to answer "should I dump before I stop" and costs one statement. The table names
+  come from the dump's own manifest, so the umbrella holds no copy of the schema.
 
-- [ ] **A5 · destructive** — Loading a dump into a database that already holds rows
-  replaces them. `marp db load` already refuses this without `-Force`. Setup will load only
-  into an empty database (R3) and never pass `-Force` itself. Not blocking unless you
-  disagree.
+- [x] **A5 · destructive** — answered 2026-09-17: setup and `agent start` pass `-Apply`
+  and **never `-Force`**. They load into a database built moments earlier, so a refusal
+  there is telling the truth about something unexpected and quietly destroying it would be
+  the wrong answer. Overwriting a database that already holds a corpus stays a thing a
+  person types by hand.
 
 ## Decisions
 
@@ -125,11 +126,13 @@ existing doctrine that CI runs the fast tiers only and that a green pipeline is 
   the mosaic both times.
 - `marp doctor` says something true and specific after a review session that has not been
   dumped.
-- CI runs the mosaic browser tier, and it fails when the reviewer is broken.
+- A Jest suite that discards the queue leaves the database holding what it held before.
 
 ## Test plan
 
-Filled in at G3.
+`.marp/verification.md` on this branch, written before the runs and recording each one
+verbatim. Every requirement but R4's second half is exercised against a real database
+rather than argued about.
 
 ## Status
 
