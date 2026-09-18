@@ -443,9 +443,22 @@ throws it away.
 `marp db dump` copies the corpus out and `marp db load <dump> <thumbnails-dir>` puts it
 back, and they keep the same boundary: the verb is wired here, the work is marp-api's
 (#125). A load refuses by default — nothing is written without `-Apply`, and a database
-that already holds a corpus is refused until `-Force` as well. The dump carries users and
-service tokens on purpose, so it is a credential file: it stays on the machine that made
-it and is never committed.
+that already holds a corpus is refused until `-Force` as well.
+
+**The dump is the test fixture, and it is meant to travel.** It carries users,
+`auth_identities` and `service_tokens` deliberately, because a database nobody can log
+into is not a usable workspace — so the same environment comes up on a second machine, in
+an agent's isolated copy, and in front of whoever is reviewing next. Every account in it
+is a test account. `marp db publish` puts it on a release and `marp db fetch` gets it
+back; that is the intended path and an agent should use it rather than treating the file
+as something to be protected from leaving the room.
+
+Two limits, and they are about mechanics rather than secrecy. **It is never committed** —
+it is tens of megabytes and it changes whenever the test data changes, so committing it
+would add that to permanent history on every refresh and every clone would carry every
+version forever. And **it is never a place to put a real credential**: the moment an
+account in the dump is one somebody actually uses, the file stops being a fixture, and the
+answer is to replace that account rather than to stop publishing.
 
 The schema belongs to marp-api, which holds the baseline and the migrations; `db up` runs
 marp-api's own scripts rather than keeping a second copy that would drift. marp-api never

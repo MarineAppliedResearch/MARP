@@ -1,124 +1,144 @@
 ---
-task: MarineAppliedResearch/MARP#132-umbrella
-repos: [marp]
-status: verifying
+task: MarineAppliedResearch/MARP#<n>
+repos: [MARP, MARP_API]
+status: design
 needs: []
 ---
 
-<!--
-  The umbrella half of MARP_API#132, authorised after that issue's PR (#160) merged.
-  MARP_API now reads THUMBNAIL_STORAGE_DIR; nothing on this side sets it, so the
-  commands that move thumbnails can still point the wrong directory at the wrong
-  database. That is the whole of this task, plus a question to answer rather than
-  build.
--->
-
 ## Goal
 
-`marp db load` can no longer replace one database's thumbnails while writing another
-database's rows. MARP_API#132 made the thumbnail directory configurable but nothing in
-this repository sets it, so a load aimed at a second database with `-DataDirName` still
-restores its pictures into whichever directory `MARP_API/.env` happens to name -- which
-belongs to the first database. The rows go one place and the JPEGs go another, both
-commands report success, and what is left is two databases with broken tiles.
+Setting up a workspace — a fresh clone, a second machine, or an agent — gives you a
+working MARP with data already in it: the observations, the thumbnails and a login, loaded
+from the dump. Tests then run against that database and are free to write to it, because
+it is a copy and the dump is the master. Nothing anywhere has to be treated as precious,
+and no test can reach a database that is not disposable.
+
+This is the design that was intended when `marp db dump` and `marp db load` were built
+(#125) and when the testing database was built (MARP_API#157). Both work. Neither is
+called from workspace setup, so every workspace today comes up either empty or pointed at
+the one database that holds real work.
 
 ## Requirements
 
-- **R1** -- `marp db dump` and `marp db load` take a thumbnails directory for the database
-  they are acting on, and pass it to marp-api as `THUMBNAIL_STORAGE_DIR`, exactly the way
-  they already pass `PG_BIN`. `marp.sh`'s spelling matches its existing style.
-- **R2** -- Given no such directory, both behave exactly as they do today. An existing
-  invocation against the workspace's own database must not change, and must not start
-  needing a new flag.
-- **R3** -- `load` **refuses** when it is aimed at a second database (`-DataDirName`) and
-  no thumbnails directory was named. That is the case that destroys: the directory it
-  would replace belongs to a database it is not writing to. The refusal names the flag.
-- **R4** -- `dump` **warns** in the same case and continues. It reads rather than
-  destroys, so it follows the graduated rule this script already uses for `-Apply` and
-  `-Force`: the loud stop is for the destructive half.
-- **R5** -- `marp agent start` writes `THUMBNAIL_STORAGE_DIR` into the workspace's `.env`,
-  and `marp agent env` prints it. This makes explicit what is currently true only by
-  accident, so that anybody -- or any command -- that needs to know where that workspace's
-  thumbnails live can read it rather than infer it.
-- **R6** -- The value written is **relative**, so a workspace that is moved or copied still
-  resolves it. marp-api resolves a relative value against its own repository root.
-- **R7** -- `node scripts/harness/check.mjs` is no worse than it was before this branch.
+- **R1** — `marp setup` on a fresh clone loads the newest dump into the database it just
+  built, including the reviewer and administrator logins, so the workspace is usable
+  without any further step.
+- **R2** — `marp agent start` does the same for an agent's isolated database, with that
+  agent's own thumbnail directory (MARP_API#132), so an agent sees the same rows a
+  developer does.
+- **R3** — A workspace that already has a database keeps it. Setup loads the dump when the
+  database is empty and leaves it alone otherwise, so re-running setup is safe.
+- **R4** — The Jest suites run against a database that is a copy of the dump. No suite can
+  write to a database whose contents are not reproducible from the dump.
+- **R5** — `marp db dump` refreshes the master copy from the database in front of you, and
+  is the only way a new inference run or a review session becomes part of what other
+  workspaces get.
+- **R6** — `marp doctor` reports when the database holds work the dump does not, naming
+  roughly how much, so unsaved work is visible before something rebuilds the database.
+- **R7** — A test run against a non-local database still refuses, as it does today
+  (`tests/setup/local-database-guard.js`). Nothing in this task weakens that.
+- **R8** — A fresh clone on a machine that has never seen this project can fetch the dump
+  with one documented command and nothing copied by hand. **The dump is never committed.**
+  It is published as a release asset and cached locally, so no repository grows by the size
+  of the test data every time the test data changes.
+
+**Out of scope, deliberately:** CI does not get the dump and does not run the browser
+tier. CI stays fast and keeps building an empty database from the baseline and the
+migrations; the browser tier runs locally before the pull request. This follows the
+existing doctrine that CI runs the fast tiers only and that a green pipeline is not G4.
 
 ## Open assumptions
 
-- [ ] **A1 · architectural · non-blocking** -- The umbrella names a thumbnails directory
-  only when it is *told* one, rather than deriving one. It could compute
-  `MARP_API/storage/instances/<name>/observation-thumbnails` and pass it always, which
-  would need no new flag — but it would make this repository a second owner of marp-api's
-  storage layout, which is the drift `db/corpus.js` avoids by reading `STORAGE_DIR` from
-  `config/thumbnails.js` rather than restating the path. The same boundary the header of
-  `db.ps1` states twice: this side contributes where PostgreSQL's tools are and which
-  database is running, and nothing about marp-api's own files. Recommendation as built.
-- [ ] **A2 · destructive · non-blocking** -- `-DataDirName` is the signal for "a database
-  other than this checkout's own", not `-Port`. A different port with the same data
-  directory is the same cluster reached differently, and somebody whose database is on a
-  non-default port because 5432 was taken must not meet a refusal on every load. Two
-  clusters need two data directories, so the signal is exact and has no false positives;
-  `marp agent start` already passes `--data-dir` for every workspace it makes.
-- [ ] **A3 · environment · non-blocking** -- `marp setup`'s `Set-ApiEnvironment` is left
-  alone. The main checkout's default is already correct, so writing it would pin a value
-  that is better left implicit there, and `setup` rewrites somebody's real configuration
-  file. Agent workspaces are different: their `.env` is generated wholesale by this
-  repository, so being explicit there costs nothing.
-- [ ] **A4 · environment · non-blocking** -- `db up` is not given the variable. It runs
-  `init-database.js` and `db:migrate`, neither of which writes an observation thumbnail --
-  the one migration that writes files writes species pictures, and the thumbnail migration
-  enqueues rows. Adding it there would be a variable set for no reader.
+- [x] **A1 · security/permissions · blocking** — answered 2026-09-17: every account in the
+  dump is a test account whose password is used nowhere else. The dump may travel and may
+  be published. This settles *whether* it can leave the machine; it says nothing about
+  *where* it goes, which is A3.
 
-No blocking assumption is open.
+- [x] **A2 · architectural · blocking** — answered 2026-09-17: **one** database per
+  workspace. It is loaded from the dump and the tests write to it directly. The accepted
+  cost is that running the suite changes the database under an open browser tab.
+  `scripts/testing-database.js` provisions a second one today for the browser tier; what
+  becomes of it is a question for the plan, not a blocker.
+
+- [x] **A3 · environment · blocking** — answered 2026-09-17: **a GitHub Release asset, and
+  never a commit.** The dump is roughly 29 MB and changes whenever the test data changes;
+  committing it would add that to permanent history on every refresh and every clone would
+  carry it forever. A release asset keeps every repository the size it is now, keeps each
+  dump versioned and downloadable, and lets old ones be deleted. `marp setup` fetches the
+  newest and caches it under the git-ignored `.marp/local/corpus/`.
+
+  CI is not a consumer: it does not get the dump and does not run the browser tier
+  (see *Out of scope*).
+
+- [ ] **A4 · behavioural** — R6's "holds work the dump does not": is comparing row counts
+  per table enough to be useful, or do you want it to name what is new (this many
+  observations, this many reviews)? Counts are a few lines; naming them is a query per
+  table. Not blocking — I will start with counts.
+
+- [ ] **A5 · destructive** — Loading a dump into a database that already holds rows
+  replaces them. `marp db load` already refuses this without `-Force`. Setup will load only
+  into an empty database (R3) and never pass `-Force` itself. Not blocking unless you
+  disagree.
 
 ## Decisions
 
-- **2026-09-12** -- Agent workspaces do **not** share a thumbnails directory today, and
-  this task does not change that. `marp agent start` copies `storage/` into each workspace
-  and marp-api's default path is checkout-relative, so each already has its own. Whether
-  they *should* share is a real question with a real saving behind it (26 MB each, three
-  workspaces), and it is answered in the report as an argument rather than built. See
-  *Not covered*.
+- **2026-09-17** — The dump is a *testing* dump, portable by design. It carries auth
+  identities precisely so the same environment comes up on any machine. The guidance in
+  `CLAUDE.md` and `AGENTS.md` that it "stays on the machine that made it and is never
+  committed" describes it as if it were production credentials, and that framing is what
+  has stopped every agent from wiring it into setup. It is wrong for what this file is for
+  and gets corrected as part of this task — subject to A1, which is about *where* it may
+  live, not *whether* it may travel.
 
 ## Plan
 
-1. `scripts/db.ps1`: a `-ThumbnailDir` parameter; `Invoke-ApiScript` passes it as
-   `THUMBNAIL_STORAGE_DIR` when set; `load` refuses and `dump` warns per R3 and R4.
-2. `scripts/db.sh`: the same, spelled `--thumbnail-dir`.
-3. `scripts/harness/agent.mjs`: write the line into the generated `.env`, and print it in
-   `agent env`.
-4. Documentation: `db.ps1`'s and `db.sh`'s own headers, and the umbrella's `CLAUDE.md`
-   under *Copying the corpus out, and back*. No environment literals.
-5. `node scripts/harness/check.mjs`.
+1. Correct the dump doctrine in the umbrella's `AGENTS.md` and `CLAUDE.md`. Both
+   occurrences are outside the `marp:shared` block, so no component sync and no umbrella
+   promotion is needed. Do this first: while it reads *"never committed"* with no
+   distinction between publishing a test dump and leaking production credentials, the next
+   agent refuses this work for the reason it gives.
+2. `marp db publish` — upload the newest local dump as a release asset, and
+   `marp db fetch` — download the newest published one into `.marp/local/corpus/` if it is
+   not already there (R5, R8).
+3. `marp db load` gains a non-interactive path suitable for setup: load into an empty
+   database, refuse a non-empty one, no prompt.
+4. `marp setup` fetches then loads, after the migrations (R1, R3, R8).
+5. `marp agent start` does the same for an agent's database, passing that agent's
+   thumbnail directory (R2). `scripts/harness/agent.mjs` documents the opposite today and
+   that comment goes with it.
+6. `marp doctor` gains the unsaved-work check (R6).
+7. **MARP_API:** point the Jest suites at the workspace's dump-loaded database per A2, and
+   correct `jest.config.js`, whose header states that tests run against the development
+   database as a design choice.
+8. **MARP_API:** `tests/thumbnails.test.js` still trips the corpus guard even on a copy,
+   because `discardQueue()` deletes every `queued` row and the suite calls it. A copy makes
+   that harmless to keep, but the suite still fails, so the guard and that test have to
+   agree — scope the delete, restore in `afterAll`, or let the guard treat a reproducible
+   database differently. Smallest change wins; decide with the code in front of me.
 
 ## Acceptance criteria
 
-- A load aimed at a second database without a thumbnails directory refuses, names the
-  flag, and writes nothing.
-- The same load with the flag restores that database's pictures into that database's
-  directory and leaves every other directory untouched, verified by file count.
-- An ordinary load against the workspace's own database behaves exactly as before.
-- A newly generated agent `.env` carries a relative `THUMBNAIL_STORAGE_DIR`.
-- The harness check is no worse than at `cc2311e`.
+- A clone on a second machine reaches a mosaic page with tiles on it using only the
+  documented setup command.
+- `marp agent start` produces an agent that can run the mosaic browser tier and see rows.
+- Running the full Jest suite twice in a row leaves the dump-loaded database able to serve
+  the mosaic both times.
+- `marp doctor` says something true and specific after a review session that has not been
+  dumped.
+- CI runs the mosaic browser tier, and it fails when the reviewer is broken.
 
 ## Test plan
 
-In `.marp/verification.md` at G3. These are shell scripts with no test harness in this
-repository, so verification is running them for real — and doing that safely means **dry
-runs and refusals only**, never `-Apply`. A refusal stops before anything runs and a dry
-run ends before `pg_restore`, so both can be aimed at a real database and prove what they
-need to: which directory the report names, and which file count it holds. Nothing is
-loaded, and the thumbnail directories are counted before and after.
+Filled in at G3.
 
-## Not covered
+## Status
 
-- **Whether agent workspaces should share one thumbnail store.** Answered as an argument,
-  with evidence from the code, and deliberately not built. An overlay scheme is a design
-  the human wants to see argued first.
-- **`marp setup`** — see A3.
-- **The shared `AGENTS.md` block.** Nothing here needs it. Changing it is three steps
-  including promoting the umbrella to `master`, and that is not started casually.
-- **`marp-api (develop) carries .marp/task.md`**, which the harness already failed on
-  before this branch existed. It is the spec from PR #160, unretired. Retiring it means
-  committing on another repository's `develop`, which is not this branch's to do.
+- **Gate:** implementing
+- **Notes:** Written 2026-09-17 after establishing that `marp agent start` builds an empty
+  database by design, that CI runs no browser tests at all, and that
+  `tests/thumbnails.test.js` deleted a row from the development database via an unscoped
+  `DELETE ... WHERE status = 'queued'` in `discardQueue()`. A1–A3 answered the same day;
+  A4 and A5 carry a stated default and are not blocking.
+
+  The umbrella half (plan 1–6) lands here. The `MARP_API` half (plan 7–8) is a second
+  branch and a second pull request in that repository, referenced from this task's issue.
