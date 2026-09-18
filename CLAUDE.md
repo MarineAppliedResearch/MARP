@@ -138,7 +138,7 @@ Two related habits, both of which have already cost time here:
 already running. They exist because the development database holds work that
 cannot be regenerated in an afternoon and had no backup at all until #125.
 
-Four things about them, each of which is the reason for a decision rather than a
+Five things about them, each of which is the reason for a decision rather than a
 detail:
 
 - **A dump is two things**, so a load takes two inputs. `observation_thumbnails`
@@ -148,13 +148,32 @@ detail:
 - **A load refuses by default.** Without `-Apply` it connects, counts, says what
   it would destroy and stops; with `-Apply` it still refuses a database that
   already holds a corpus until `-Force`. `--apply` and `--force` from `marp.sh`.
-- **A dump is a credential file.** It carries users, `auth_identities` and
-  `service_tokens` deliberately, because without them a loaded database cannot be
-  logged into -- so it stays on the machine that made it and is never committed or
-  attached to an issue. It lands in marp-api's git-ignored `.marp/local/`, and
+- **A dump is the test fixture, and it is meant to travel.** It carries users,
+  `auth_identities` and `service_tokens` deliberately, because a database nobody
+  can log into is not a usable workspace -- so a second machine, an agent's
+  isolated copy and a fresh clone all come up as the same environment. Every
+  account in it is a test account. `marp db publish` puts it on a release and
+  `marp db fetch` gets it back; that is the path, and it is what workspace setup
+  uses. It lands in marp-api's git-ignored `.marp/local/`, and
   `MARP_API/.marp/local/corpus-dump.md` is where to look for the last one.
+
+  **Never committed**, and that is about size rather than secrecy: it is tens of
+  megabytes and it changes whenever the test data changes, so committing it would
+  add that to permanent history on every refresh and every clone would carry every
+  version forever. And never a home for a real credential -- the moment an account
+  in it is one somebody actually uses, it has stopped being a fixture, and the fix
+  is to replace the account rather than to stop publishing the dump.
 - **The load checks its own work**, comparing what it produced against a manifest
   written when the dump was taken. A dump that cannot be loaded is not a backup.
+- **A second database needs `-ThumbnailDir`, and `load` refuses without it.** The
+  pictures belong to the database that names them, so a load aimed at a second
+  database with `-DataDirName` has to be told where that database keeps them --
+  otherwise it replaces the directory `MARP_API/.env` names, which belongs to a
+  different database, and reports success while doing it. `dump` warns instead of
+  refusing: it reads, so it destroys nothing, but the dump it produces would carry
+  the wrong pictures and verify against its own manifest anyway. `--thumbnail-dir`
+  from `marp.sh`. It is **named, never derived** -- where marp-api keeps its files
+  is marp-api's decision, and a path computed here would be a second copy of it.
 
 The same boundary as the schema: the verb is wired here and the work is
 marp-api's `scripts/dump-corpus.js` and `scripts/load-corpus.js`. This side

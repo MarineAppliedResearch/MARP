@@ -1,5 +1,40 @@
 # MARP Platform
 
+<!-- marp:brand start -->
+<!-- Canonical source: MARP/README.md. Do not edit this block in a component repository;
+     edit it here and run `marp harness sync`. -->
+
+<p align="center">
+  <strong>MARP</strong> is the Marine Analysis and Reporting Platform. It carries an ocean
+  survey from the video a dive brings home through to the science: annotation, review,
+  machine-learning assistance, processing and reporting, on a platform an organisation
+  hosts for itself.
+</p>
+
+<p align="center">
+  <a href="https://github.com/MarineAppliedResearch/MARP">Umbrella</a> &middot;
+  <a href="https://github.com/MarineAppliedResearch/MARP_API">API</a> &middot;
+  <a href="https://github.com/MarineAppliedResearch/marp-video-player">Video player</a> &middot;
+  <a href="https://github.com/MarineAppliedResearch/marp-inference-worker">Inference worker</a> &middot;
+  <a href="https://github.com/MarineAppliedResearch/marp-jellyfin">Video server</a>
+</p>
+<!-- marp:brand end -->
+
+<p align="center">
+  <img alt="Project status" src="https://img.shields.io/badge/status-internal%20production%20%7C%20active%20development-05b9c8">
+  <img alt="Repositories" src="https://img.shields.io/badge/repositories-5-05b9c8">
+</p>
+
+<table width="100%">
+  <tr>
+    <td align="center" bgcolor="#03101f">
+      <br>
+      <img src="assets/marp-logo.png" alt="MARP logo" width="430">
+      <br><br>
+    </td>
+  </tr>
+</table>
+
 MARP (Marine Analysis and Reporting Platform) is composed of multiple independently maintained applications and services. This repository is the umbrella repository for the MARP ecosystem: it is the workspace root, and it holds architecture, deployment, development setup, compatibility information, and system-level documentation.
 
 The goal is a single system that builds easily and can be worked on as a whole, rather than a set of repositories that each have to be discovered and configured by hand.
@@ -147,6 +182,11 @@ Nothing forces you to use it. `marp-api` connects through five `DB_*` variables 
 ## Components and related repositories
 
 `services/repos.yml` is the canonical registry. It separates two categories, because they are used differently.
+
+**`assets/marp-logo.png` here is the canonical logo.** A README on GitHub cannot reach
+across repositories with a relative path, so every component carries a copy of that file
+and shows it the same way. `marp harness check` fails when a component's copy is missing,
+when its README does not show it, or when the shared brand block above has drifted.
 
 **Components** make up a MARP deployment. These are what a MARP install consists of.
 

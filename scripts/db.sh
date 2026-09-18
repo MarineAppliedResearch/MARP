@@ -63,6 +63,10 @@ PORT=5432
 PASSWORD='marp_dev_password'
 APPLY=
 FORCE=
+# Where the thumbnails of the database being acted on live, passed to marp-api as
+# THUMBNAIL_STORAGE_DIR (MARP_API#132). Empty means "say nothing", which leaves
+# marp-api reading its own .env exactly as every existing invocation depends on.
+THUMBNAIL_DIR=
 # dump's destination, or load's two paths. Accumulated into one string and
 # re-split by `set --` where it is used: this is POSIX sh and has no arrays, and
 # passing "$@" straight through instead would mean the loop below could no
@@ -84,7 +88,7 @@ Commands:
   destroy   stop the server and delete the database.
 
   dump [<destination>]
-  load <dump> <thumbnails-dir> [--apply] [--force]
+  load <dump> <thumbnails-dir> [--apply] [--force] [--thumbnail-dir DIR]
 
 Options:
   --port N        TCP port. Default 5432.
@@ -92,6 +96,13 @@ Options:
                   worktree on this machine gets its own. Needs its own --port too;
                   one server cannot serve two data directories.
   --password P    Password for the database role.
+  --thumbnail-dir DIR
+                  Where this database's thumbnails live; dump and load only.
+                  Relative paths resolve against the MARP_API repository root.
+                  Required by load whenever --data-dir is given: a load replaces
+                  that directory outright, and the default one belongs to another
+                  database. dump warns instead -- it reads, so it destroys
+                  nothing, but the dump would carry the wrong pictures.
   --apply         load only. Without it a load connects, counts, says what it
                   would destroy, and stops. There is one irreplaceable corpus on
                   this machine and a mistyped path must not be what takes it.
@@ -109,6 +120,7 @@ while [ $# -gt 0 ]; do
         --port) PORT=${2:?--port needs a value}; shift ;;
         --data-dir) INSTANCE=${2:?--data-dir needs a value}; shift ;;
         --password) PASSWORD=${2:?--password needs a value}; shift ;;
+        --thumbnail-dir) THUMBNAIL_DIR=${2:?--thumbnail-dir needs a value}; shift ;;
         --apply) APPLY=--apply ;;
         --force) FORCE=--force ;;
         -h|--help) usage; exit 0 ;;
@@ -447,10 +459,36 @@ api_script() {
     # not override what is already set, so these win for this one command and that
     # repository's configuration is left exactly as written. Run from the
     # repository root, because dotenv resolves .env against the working directory.
-    DB_HOST="$DB_HOST_ADDR" DB_PORT="$PORT" DB_NAME="$DATABASE" \
-    DB_USER="$ROLE" DB_PASSWORD="$PASSWORD" DB_DIALECT=postgres \
-    PG_BIN="$BIN_DIR" \
-    sh -c "cd '$API_DIR' && exec node '$script' \"\$@\"" sh "$@"
+    #
+    # THUMBNAIL_STORAGE_DIR is exported inside a subshell rather than added to
+    # the prefix, and that is not a style choice. **A command prefix assignment
+    # has to be literal.** `${VAR:+NAME=value} cmd` does not conditionally set
+    # NAME -- it expands to a word the shell then runs as the command, and the
+    # error is `NAME=value: No such file or directory`. Written that way first,
+    # and that is exactly what it did. The subshell keeps the export out of the
+    # rest of the script; `if` rather than `&&` because `set -eu` is on and a
+    # false `&&` chain would end the subshell before it ran anything.
+    (
+        if [ -n "$THUMBNAIL_DIR" ]; then
+            export THUMBNAIL_STORAGE_DIR="$THUMBNAIL_DIR"
+        fi
+        DB_HOST="$DB_HOST_ADDR" DB_PORT="$PORT" DB_NAME="$DATABASE" \
+        DB_USER="$ROLE" DB_PASSWORD="$PASSWORD" DB_DIALECT=postgres \
+        PG_BIN="$BIN_DIR" \
+        sh -c "cd '$API_DIR' && exec node '$script' \"\$@\"" sh "$@"
+    )
+}
+
+# Is this command aimed at a database other than this checkout's own?
+#
+# The question dump and load both have to ask before they move thumbnails, and it
+# turns on --data-dir rather than on --port. A different port with the same data
+# directory is the same cluster reached differently, so keying on the port would
+# refuse every load for somebody whose database sits elsewhere because 5432 was
+# taken. Two clusters need two data directories, so --data-dir is exact, and
+# `marp agent start` passes it for every workspace it creates.
+second_database() {
+    [ -n "$INSTANCE" ] && [ -z "$THUMBNAIL_DIR" ]
 }
 
 # Copy the corpus out: the database and the thumbnails both.
@@ -471,6 +509,17 @@ do_dump() {
         warn 'Start it with: marp.sh db up'
         return 1
     }
+
+    # A warning rather than a refusal, because a dump reads and destroys nothing.
+    # Still worth saying: it would carry the default directory's JPEGs beside this
+    # database's rows, and the manifest would record a file count that agrees with
+    # itself -- so the dump would verify on load and still be wrong.
+    if second_database; then
+        warn "This is the '$INSTANCE' database, and no --thumbnail-dir was given."
+        warn 'The rows will come from it and the thumbnails from whichever directory'
+        warn 'MARP_API/.env names -- which belongs to a different database. Pass'
+        warn '--thumbnail-dir DIR to dump the pictures that go with these rows.'
+    fi
 
     # shellcheck disable=SC2086
     set -- $POSITIONAL
@@ -506,6 +555,23 @@ do_load() {
         warn 'Two inputs are needed: the dump, and the directory of thumbnails.'
         warn '    marp.sh db load <dump> <thumbnails-dir> --apply'
         warn 'MARP_API/.marp/local/corpus-dump.md records where the last dump is.'
+        return 1
+    fi
+
+    # The refusal --thumbnail-dir exists for. A load replaces the destination
+    # directory's contents outright, so aiming one at a second database without
+    # saying where that database's pictures go destroys a directory belonging to a
+    # database this command is not writing to -- and reports success twice while
+    # doing it. Nothing runs, not even the dry run, because the dry run would print
+    # the wrong directory's file count as the thing it was about to replace.
+    if second_database; then
+        warn "Refused: this is the '$INSTANCE' database and no --thumbnail-dir was given."
+        warn ''
+        warn 'Nothing has been changed. A load replaces the whole thumbnails directory,'
+        warn 'and without this it would replace the one MARP_API/.env names -- which'
+        warn 'belongs to a different database. Say where this one keeps its pictures:'
+        warn '    marp.sh db load <dump> <thumbnails-dir> --apply --thumbnail-dir DIR'
+        warn 'A relative path resolves against the MARP_API repository root.'
         return 1
     fi
 

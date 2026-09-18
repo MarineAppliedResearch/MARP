@@ -229,13 +229,28 @@ clone, check out the branch, and it is already isolated.
 
 ```bash
 marp agent start marp-api 72-unrendered-states   # when you need the isolation
-marp agent list                                  # what is set up, and on which ports
+marp agent list                                  # what is set up, and which are running
+marp agent stop 72-unrendered-states             # keeps the working copy and the branch
+marp agent stop --all                            # every one, when you do not know whose
 marp agent remove 72-unrendered-states           # keeps the branch
 ```
 
-**Stop what you start.** A server outliving its work is not untidiness — one left running
-in another checkout was adopted by a different workspace's browser tests, which then graded
-that checkout's code for an hour without saying so.
+**Stop what you start, and stop it in the message where you report.** A server outliving
+its work is not untidiness — one left running in another checkout was adopted by a
+different workspace's browser tests, which then graded that checkout's code for an hour
+without saying so.
+
+The per-branch form is the one nobody runs, because whoever finds the leftovers does not
+know which branch owns them — so `marp agent stop --all` exists and is the right thing to
+type when in doubt. It stops servers only: working copies, databases and branches all
+survive, and `marp agent start` on the same branch picks up where it left off. `marp agent
+list` marks what is still listening and says so at the end, which is the place this gets
+noticed.
+
+**A stale `postmaster.pid` is not a running server.** A database killed without a clean
+shutdown leaves the lock file behind, so anything that counts those files over-reports
+badly — this workspace once looked like eleven live servers when three were up. Count what
+is listening on a port.
 
 `marp harness check` reports when two workspaces collide: the same port is a failure, an
 exclusive resource named twice in `needs:` is a failure, and two agents on one repository
@@ -405,6 +420,7 @@ how to open the issue, what the gates ask of them, and what to look for at each 
 
 ```
 services/repos.yml        the registry. Authoritative, and read by the scripts.
+assets/marp-logo.png      the canonical logo. Every component carries a copy.
 scripts/marp.{ps1,sh}     clone, status, pull, doctor, db, spec, verify, worktree, harness
 scripts/db.{ps1,sh}       up, down, status, env, dump, load, destroy
 scripts/harness/          the checks, in Node. One implementation, several callers.
@@ -412,6 +428,22 @@ architecture/decisions/   cross-repository ADRs
 architecture/contracts.md the coupling points between repositories
 .marp/                    task and verification templates; local/ is git-ignored
 ```
+
+**Two blocks travel from here into every component**, both between markers and both
+rewritten by `marp harness sync`: the platform rules, in `AGENTS.md` between
+`marp:shared`, and the README identity, in `README.md` between `marp:brand`. The second
+is the one-line statement of what MARP is and the row of links from each repository to
+all the others.
+
+What the brand block cannot carry is checked separately, by `readme-check.mjs`: every
+repository shows `marp-logo.png` from its own copy, because a README on GitHub cannot
+reach across repositories with a relative path; the status badge is the platform cyan and
+the licence badge the platform green; and nothing links to the retired `MARE_API` name,
+which still redirects and will stop the moment somebody creates a repository with it.
+
+`marp-jellyfin` and `VIDEO_PROCESSING_GUI` are excluded from all of it, on purpose. The
+first is a vendor fork carrying Jellyfin's own README. The second is a legacy client that
+is deliberately branded MARE and is not part of a MARP deployment.
 
 **The umbrella never absorbs a component.** Every component directory is git-ignored here
 and `marp doctor` fails if the registry and `.gitignore` disagree. Adding a component means
@@ -426,9 +458,22 @@ throws it away.
 `marp db dump` copies the corpus out and `marp db load <dump> <thumbnails-dir>` puts it
 back, and they keep the same boundary: the verb is wired here, the work is marp-api's
 (#125). A load refuses by default — nothing is written without `-Apply`, and a database
-that already holds a corpus is refused until `-Force` as well. The dump carries users and
-service tokens on purpose, so it is a credential file: it stays on the machine that made
-it and is never committed.
+that already holds a corpus is refused until `-Force` as well.
+
+**The dump is the test fixture, and it is meant to travel.** It carries users,
+`auth_identities` and `service_tokens` deliberately, because a database nobody can log
+into is not a usable workspace — so the same environment comes up on a second machine, in
+an agent's isolated copy, and in front of whoever is reviewing next. Every account in it
+is a test account. `marp db publish` puts it on a release and `marp db fetch` gets it
+back; that is the intended path and an agent should use it rather than treating the file
+as something to be protected from leaving the room.
+
+Two limits, and they are about mechanics rather than secrecy. **It is never committed** —
+it is tens of megabytes and it changes whenever the test data changes, so committing it
+would add that to permanent history on every refresh and every clone would carry every
+version forever. And **it is never a place to put a real credential**: the moment an
+account in the dump is one somebody actually uses, the file stops being a fixture, and the
+answer is to replace that account rather than to stop publishing.
 
 The schema belongs to marp-api, which holds the baseline and the migrations; `db up` runs
 marp-api's own scripts rather than keeping a second copy that would drift. marp-api never

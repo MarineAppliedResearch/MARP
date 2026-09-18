@@ -26,7 +26,15 @@
  *   marp agent list                    what is set up, and on which ports
  *   marp agent env <branch>            print the settings again
  *   marp agent stop <branch>           stop that agent's database, keep the work
+ *   marp agent stop --all              stop every one of them
  *   marp agent remove <branch>         throw the whole thing away
+ *
+ * **Stop what you start.** `list` marks the ones still listening and says so at the end,
+ * because a server outliving its work is not untidiness: one left running in a different
+ * checkout was adopted by another workspace's browser tests, which then graded that
+ * checkout's code for an hour without saying so. `stop --all` exists because the
+ * per-branch form is the one nobody runs -- a finished agent leaves a server behind and
+ * the next person has no idea which of a dozen branches owns it.
  */
 
 import { spawnSync, execFileSync } from 'node:child_process';
@@ -165,6 +173,82 @@ function stopListener(port) {
   return true;
 }
 
+/**
+ * Run one `marp db` verb against a named database, and say whether it worked.
+ *
+ * The platform split is the same one `db(a, …)` makes further down; this one
+ * takes the parts rather than an agent record, because `start` is building that
+ * record and does not have one yet.
+ */
+function dbVerb(dbPort, name, verb, extra = []) {
+  const win = process.platform === 'win32';
+  const script = join(UMBRELLA, 'scripts', win ? 'db.ps1' : 'db.sh');
+  const args = win
+    ? ['-NoProfile', '-File', script, verb, '-Port', String(dbPort), '-DataDirName', name, ...extra]
+    : [script, verb, '--port', String(dbPort), '--data-dir', name, ...extra];
+  return spawnSync(win ? 'powershell' : 'sh', args, { stdio: 'inherit' }).status === 0;
+}
+
+/**
+ * Give this agent's database the published test corpus.
+ *
+ * An isolated copy used to come up with an empty schema, which is a working
+ * install and a useless workspace: no observations means no mosaic, so an agent
+ * sent to work on the reviewer opened it to nothing and had no way to tell
+ * whether that was the bug. It now starts with what a developer sees.
+ *
+ * Three steps and the order matters. `pg_restore` drops every table and
+ * recreates them from the dump — including `SequelizeMeta` — so a load moves the
+ * schema *back* to whatever the dump was taken at. The migrations run again
+ * afterwards to bring it forward, and that is a no-op whenever the dump is
+ * current.
+ *
+ * `--thumbnail-dir` is not optional here. The pictures belong to the database
+ * that names them, and without it the load replaces the directory this agent's
+ * parent checkout is using (MARP_API#132).
+ *
+ * Never fatal. An agent with an empty database is worth having; an agent that
+ * failed to be created is not.
+ */
+function loadCorpus(dbPort, name, dir) {
+  const win = process.platform === 'win32';
+  const flag = (n, v) => (win ? [`-${n[0].toUpperCase()}${n.slice(1)}`, v] : [`--${n}`, v]);
+
+  step('Its test corpus');
+  if (!dbVerb(dbPort, name, 'fetch')) {
+    warn('no corpus fetched; this agent starts with an empty database');
+    console.log(dim('      marp db fetch   then   marp db load <dump> <tiles> --apply'));
+    return false;
+  }
+
+  const root = join(UMBRELLA, 'MARP_API', '.marp', 'local', 'corpus');
+  const newest = existsSync(root)
+    ? readdirSync(root, { withFileTypes: true })
+        .filter((e) => e.isDirectory()).map((e) => e.name).sort().pop()
+    : null;
+  if (!newest) { warn('no dump on disk after fetching; empty database'); return false; }
+
+  const dump = join(root, newest, 'corpus.dump');
+  const tiles = join(root, newest, 'observation-thumbnails');
+  /* Its own storage/, matching the THUMBNAIL_STORAGE_DIR this agent's .env names.
+     `start` deliberately does not copy the parent's tiles in, because a load
+     replaces this directory wholesale anyway. */
+  const here = join(dir, 'storage', 'observation-thumbnails');
+
+  const applied = win
+    ? dbVerb(dbPort, name, 'load', [dump, tiles, '-Apply', ...flag('thumbnailDir', here)])
+    : dbVerb(dbPort, name, 'load', [dump, tiles, '--apply', ...flag('thumbnail-dir', here)]);
+  if (!applied) { warn('the corpus did not load; this agent has an empty database'); return false; }
+
+  // Forward again, past whatever landed since the dump was taken.
+  if (!dbVerb(dbPort, name, 'up', win ? ['-Quiet'] : [])) {
+    warn('corpus loaded but the migrations did not run; run `marp db up` for it');
+    return false;
+  }
+  ok(`corpus ${newest} loaded`);
+  return true;
+}
+
 /* --------------------------------------------------------------------- start */
 
 async function start(repoName, branch) {
@@ -219,6 +303,7 @@ async function start(repoName, branch) {
       warn('the database did not come up; the working copy is fine, fix the database and rerun `marp db up` for it');
     } else {
       ok(`database on 127.0.0.1:${dbPort}`);
+      loadCorpus(dbPort, name, dir);
     }
 
     step('.env');
@@ -239,6 +324,24 @@ async function start(repoName, branch) {
       'DB_USER=marp_user',
       'DB_PASSWORD=marp_dev_password',
       'DB_DIALECT=postgres',
+      '',
+      /*
+       * Where this workspace's observation thumbnails live (MARP_API#132).
+       *
+       * It is the value marp-api would default to anyway, and writing it is still
+       * worth doing: `observation_thumbnails` records a filename while the JPEG
+       * lives on disk, so the rows and the files are one corpus — and anything
+       * that moves them has to be told which directory goes with which database.
+       * `marp db load` now refuses to touch a second database's pictures unless it
+       * is given that directory, and this is the line that answers it.
+       *
+       * **Relative, not absolute.** marp-api resolves a relative value against its
+       * own repository root, so a workspace that is moved or copied still finds
+       * its own pictures; an absolute path baked in at creation time would point
+       * at wherever it used to be.
+       */
+      '# This workspace has its own thumbnails, under its own storage/.',
+      'THUMBNAIL_STORAGE_DIR=storage/observation-thumbnails',
       '',
       `AUTH_SESSION_SECRET=agent-${slug(branch)}-${Math.random().toString(36).slice(2, 12)}`,
       '',
@@ -264,13 +367,24 @@ async function start(repoName, branch) {
    *
    * Copied rather than linked: an agent that writes a picture should not be writing into
    * somebody else's working copy, which is the whole point of the isolation.
+   *
+   * `observation-thumbnails/` is skipped, and it is the largest thing in there — 26 MB,
+   * 2,079 files. Copying them would be wasted twice over: `loadCorpus` runs a few steps
+   * below, and `replaceThumbnails` empties this directory before filling it from the
+   * dump — so anything copied here is deleted unread. They were also actively harmful
+   * once: `holdsCorpus` counted files rather than rows, so a provably empty second
+   * database refused a load because of pictures belonging to a different one.
    */
   for (const runtime of ['storage']) {
     const from = join(repoPath, runtime);
     if (!existsSync(from)) continue;
     step(`${runtime}/`);
     try {
-      cpSync(from, join(dir, runtime), { recursive: true, force: true });
+      cpSync(from, join(dir, runtime), {
+        recursive: true,
+        force: true,
+        filter: (source) => !source.split(/[\\/]/).includes('observation-thumbnails'),
+      });
       const files = countFiles(join(dir, runtime));
       ok(`${files} file${files === 1 ? '' : 's'} copied — git-ignored, so a clone does not bring them`);
     } catch (error) {
@@ -312,14 +426,42 @@ async function start(repoName, branch) {
 
 /* ---------------------------------------------------------------- list / env */
 
+/**
+ * Which of an agent's ports something is actually listening on.
+ *
+ * Listening, not the presence of a lock file. A database killed without a clean
+ * shutdown leaves `postmaster.pid` behind, so the file says "running" long after
+ * nothing is — which is how a survey of this workspace reported eleven live
+ * servers when three were up.
+ */
+function running(a) {
+  return [a.apiPort, a.dbPort, ...(a.testPorts || [])]
+    .filter(Boolean)
+    .filter((p) => listenerPid(p));
+}
+
 function list() {
   const agents = readAgents();
   step('Agents');
   if (!agents.length) { ok('none set up'); return; }
+
+  let live = 0;
   for (const a of agents) {
-    console.log(`  ${cyan(a.branch)}  ${a.repo}`);
+    const up = running(a);
+    if (up.length) live += 1;
+    console.log(`  ${cyan(a.branch)}  ${a.repo}${up.length ? `  ${cyan('running')}` : ''}`);
     console.log(`    ${a.dir}`);
     console.log(`    api ${a.apiPort}${a.dbPort ? `, database ${a.dbPort}` : ''}   ${dim(a.created.slice(0, 16).replace('T', ' '))}`);
+    if (up.length) console.log(`    ${dim(`listening on ${up.join(', ')}`)}`);
+  }
+
+  /* Said here because this listing is where somebody looks, and a server nobody
+     remembers starting is the thing that gets adopted by another checkout's tests. */
+  if (live) {
+    console.log('');
+    console.log(dim(`  ${live} still running. Stop them when the work is done:`));
+    console.log(dim('      marp agent stop <branch>      one of them'));
+    console.log(dim('      marp agent stop --all         every one'));
   }
 }
 
@@ -335,6 +477,10 @@ function env(branch) {
   if (existsSync(path)) { process.stdout.write(readFileSync(path, 'utf8')); return; }
   console.log(`PORT=${a.apiPort}`);
   if (a.dbPort) console.log(`DB_HOST=127.0.0.1\nDB_PORT=${a.dbPort}\nDB_NAME=mare_v1`);
+  /* The fallback for a workspace whose .env is gone, so it has to say the same
+     things `start` writes — including which thumbnails go with that database,
+     which is what `marp db load --thumbnail-dir` has to be told. */
+  console.log('THUMBNAIL_STORAGE_DIR=storage/observation-thumbnails');
 }
 
 /* -------------------------------------------------------------- stop / remove */
@@ -363,12 +509,40 @@ function stopServers(a) {
   return stopped.length;
 }
 
-function stop(branch) {
-  const a = find(branch);
+function stopOne(a) {
   step(`Stopping ${a.branch}`);
   stopServers(a);
   db(a, 'down');
   ok('database stopped; the working copy and the branch are untouched');
+}
+
+function stop(branch) {
+  stopOne(find(branch));
+}
+
+/**
+ * Stop every agent, and say how many there were.
+ *
+ * `stop <branch>` has always existed and it is the one nobody runs: a finished
+ * agent leaves a server behind and the next person has no idea which of a dozen
+ * branches owns it. This is the command you can run without knowing that.
+ *
+ * Idempotent, and quiet about the ones already down — the point is to finish with
+ * nothing running, not to report on each.
+ */
+function stopAll() {
+  const agents = readAgents();
+  if (!agents.length) { step('Agents'); ok('none set up'); return; }
+
+  const live = agents.filter((a) => running(a).length);
+  if (!live.length) {
+    step('Agents');
+    ok(`none of the ${agents.length} are running`);
+    return;
+  }
+
+  for (const a of live) stopOne(a);
+  ok(`${live.length} of ${agents.length} stopped; the working copies and branches are untouched`);
 }
 
 function remove(branch) {
@@ -404,13 +578,14 @@ if (sub === 'start') {
   if (!rest[0]) { fail('usage: marp agent env <branch>'); process.exit(2); }
   env(rest[0]);
 } else if (sub === 'stop') {
-  if (!rest[0]) { fail('usage: marp agent stop <branch>'); process.exit(2); }
-  stop(rest[0]);
+  if (rest[0] === '--all' || rest[0] === '-a') { stopAll(); }
+  else if (!rest[0]) { fail('usage: marp agent stop <branch> | --all'); process.exit(2); }
+  else { stop(rest[0]); }
 } else if (sub === 'remove') {
   if (!rest[0]) { fail('usage: marp agent remove <branch>'); process.exit(2); }
   remove(rest[0]);
 } else {
   fail(`unknown: marp agent ${sub}`);
-  console.log(dim('  start | list | env | stop | remove'));
+  console.log(dim('  start | list | env | stop [--all] | remove'));
   process.exit(2);
 }
