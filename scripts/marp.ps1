@@ -126,6 +126,13 @@ param(
     [string]$Password = 'marp_dev_password',
     [string]$DataDirName,
 
+    # Where the thumbnails of the database being acted on live (MARP_API#132).
+    # Declared here because db.ps1 *requires* it for a load aimed at a second
+    # database and this wrapper never forwarded it -- so `marp db load` into any
+    # -DataDirName database refused every time, while the documentation said to
+    # use exactly that command. The flag existed on one side of the wrapper only.
+    [string]$ThumbnailDir,
+
     # `db load` and `db dump`. Declared here rather than left to $Rest so that
     # PowerShell binds them as switches: a bare -Apply reaching db.ps1 as the
     # string '-Apply' among the positional paths would be read as a third path.
@@ -142,7 +149,13 @@ param(
     [string]$AdminPassword,
 
     # Skip creating the application token for the annotation GUI.
-    [switch]$NoToken
+    [switch]$NoToken,
+
+    # Leave the database empty instead of loading the published test corpus.
+    # For a workspace that is going to load its own data, or when there is no
+    # network. Setup never fails on the corpus either way -- this only saves the
+    # download.
+    [switch]$NoCorpus
 )
 
 $ErrorActionPreference = 'Stop'
@@ -206,6 +219,11 @@ function Invoke-Native {
 function Write-Fail { param([string]$Message) $script:Failures++; Write-Host "  FAIL  $Message" -ForegroundColor Red }
 function Write-Warn { param([string]$Message) Write-Host "  WARN  $Message" -ForegroundColor Yellow }
 function Write-Pass { param([string]$Message) Write-Host "  ok    $Message" -ForegroundColor DarkGray }
+
+# Neither a pass nor a failure. Being ahead of the dump is the normal state while
+# work is happening, and a doctor that goes red for it is a doctor people learn
+# to ignore.
+function Write-Note { param([string]$Message) Write-Host "  note  $Message" -ForegroundColor Yellow }
 
 <#
 .SYNOPSIS
@@ -543,6 +561,20 @@ function Invoke-Setup {
     & (Join-Path $PSScriptRoot 'db.ps1') up -Port $Port -Password $Password -Quiet
     if ($LASTEXITCODE -ne 0) { Write-Fail 'The database could not be prepared.'; return }
 
+    # The whole point of a setup command: a workspace you can look at. An empty
+    # schema is technically a working install and practically useless -- no
+    # observations means no mosaic, so the first thing anybody does is ask where
+    # the data is. This is where it comes from.
+    $corpusLoaded = $false
+    if ($NoCorpus) {
+        Write-Host ''
+        Write-Host 'Skipping the test corpus (-NoCorpus). The database stays empty.' -ForegroundColor DarkGray
+    } else {
+        Write-Host ''
+        Write-Host 'Test corpus' -ForegroundColor Cyan
+        $corpusLoaded = Add-TestCorpus -ApiDir $apiDir
+    }
+
     Write-Host ''
     Write-Host 'First administrator' -ForegroundColor Cyan
     $loginReady = Set-FirstAdministrator -ApiDir $apiDir
@@ -569,6 +601,74 @@ function Invoke-Setup {
         Write-Host '  The annotation GUI has its token; build and run it.' -ForegroundColor DarkGray
     }
     Write-Host '  Jellyfin settings in .env are only needed for routes that resolve media.' -ForegroundColor DarkGray
+}
+
+<#
+.SYNOPSIS
+    Put the published test corpus into the database setup just built.
+
+.DESCRIPTION
+    Fetch, load, migrate -- in that order, and the third step is the one that is
+    easy to leave out. A dump restores the schema as it stood when it was taken,
+    so loading one into a freshly migrated database *moves the schema backwards*
+    to the dump's migration head. Running the migrations again afterwards is what
+    brings it forward, and it is why `db up` is called twice rather than once.
+
+    **Never fatal.** A workspace with an empty database is worth having; a setup
+    that aborted two steps from the end is not. No published dump, no GitHub CLI,
+    a download that failed -- each says what happened and lets setup finish, and
+    the workspace still runs. `-NoCorpus` is the same outcome asked for on purpose.
+
+.OUTPUTS
+    System.Boolean. True when rows were loaded.
+#>
+function Add-TestCorpus {
+    param([Parameter(Mandatory)][string]$ApiDir)
+
+    $db = Join-Path $PSScriptRoot 'db.ps1'
+
+    & $db fetch -Port $Port -Password $Password
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '  Carrying on with an empty database. To fill it later:' -ForegroundColor Yellow
+        Write-Host '      marp db fetch' -ForegroundColor DarkGray
+        Write-Host '      marp db load <dump> <thumbnails-dir> -Apply' -ForegroundColor DarkGray
+        return $false
+    }
+
+    # The newest on disk, which `fetch` has just made sure is the newest published.
+    $corpusRoot = Join-Path $ApiDir '.marp/local/corpus'
+    $newest = Get-ChildItem -LiteralPath $corpusRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name | Select-Object -Last 1
+    if (-not $newest) {
+        Write-Host '  No dump on disk after fetching. Carrying on with an empty database.' -ForegroundColor Yellow
+        return $false
+    }
+
+    $dump  = Join-Path $newest.FullName 'corpus.dump'
+    $tiles = Join-Path $newest.FullName 'observation-thumbnails'
+
+    # -Apply, and deliberately no -Force. This runs against the database setup
+    # built moments ago, which is empty -- so a load that refuses here is telling
+    # the truth about something unexpected, and quietly destroying it would be
+    # the wrong answer to that.
+    & $db load $dump $tiles -Apply -Port $Port -Password $Password
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '  The corpus did not load. The workspace still runs, with an empty database.' -ForegroundColor Yellow
+        return $false
+    }
+
+    # Forward again. The restore just put the schema back to the dump's own
+    # migration head, which is behind this checkout whenever a migration has
+    # landed since the dump was taken -- and one nearly always has.
+    Write-Host ''
+    Write-Host 'Bringing the schema forward from the dump' -ForegroundColor Cyan
+    & $db up -Port $Port -Password $Password -Quiet
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host '  The corpus loaded but the migrations did not run. Run: marp db up' -ForegroundColor Yellow
+        return $false
+    }
+
+    return $true
 }
 
 <#
@@ -916,6 +1016,78 @@ function Invoke-Pull {
     Neither belongs in the umbrella's history, and both are awkward to undo
     later. Verifying it is cheap, so it is verified rather than assumed.
 #>
+<#
+.SYNOPSIS
+    Say whether this database holds work the newest dump does not.
+
+.DESCRIPTION
+    The one cost of making every database a reloadable copy: a review session or
+    an inference run that was never dumped is lost the next time something
+    rebuilds. This is what makes that visible *before* it matters rather than
+    after -- "you have 318 reviews the dump has not got" is a question anybody can
+    answer; noticing they are gone is not.
+
+    A note rather than a failure. Being ahead of the dump is the normal state
+    while work is happening, and doctor going red for it would teach people to
+    ignore doctor.
+
+    Counts only, and per table. Naming the individual rows would mean a query per
+    table and a schema this script does not own -- the manifest already records
+    what the dump holds, so a comparison is arithmetic on two small objects.
+#>
+function Test-CorpusDrift {
+    $apiDir = Join-Path $RepoRoot 'MARP_API'
+    $corpusRoot = Join-Path $apiDir '.marp/local/corpus'
+    $newest = Get-ChildItem -LiteralPath $corpusRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name | Select-Object -Last 1
+
+    if (-not $newest) {
+        Write-Note 'no dump on this machine, so nothing to compare. Get one: marp db fetch'
+        return
+    }
+
+    $manifestPath = Join-Path $newest.FullName 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        Write-Note "$($newest.Name) has no manifest, so it cannot be compared"
+        return
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+    # Ask the database, through the same script that knows where it is. A failure
+    # here means it is not running, which `db status` already reports properly.
+    # The table names come from marp-api's own manifest, so this script never
+    # holds a second copy of which tables a corpus consists of.
+    # Splatted, not passed as one argument. An array handed over positionally
+    # arrives in ValueFromRemainingArguments as a single item rather than as the
+    # eight names it holds, and the identifier filter then drops the lot --
+    # which looks exactly like the database being down.
+    $tables = @($manifest.counts.PSObject.Properties.Name)
+    $counts = & (Join-Path $PSScriptRoot 'db.ps1') counts -Port $Port -Password $Password @tables 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $counts) {
+        Write-Note 'the database is not running, so there is nothing to compare'
+        return
+    }
+
+    try { $live = ($counts -join "`n") | ConvertFrom-Json } catch {
+        Write-Note 'could not read the row counts'
+        return
+    }
+
+    $ahead = @()
+    foreach ($table in $manifest.counts.PSObject.Properties.Name) {
+        $there = [int]$manifest.counts.$table
+        $here = [int]$live.$table
+        if ($here -gt $there) { $ahead += "$table +$($here - $there)" }
+    }
+
+    if ($ahead.Count -eq 0) {
+        Write-Pass "nothing here that $($newest.Name) does not have"
+    } else {
+        Write-Note "this database is ahead of $($newest.Name): $($ahead -join ', ')"
+        Write-Host '         Keep it with:  marp db dump   then   marp db publish' -ForegroundColor DarkGray
+    }
+}
+
 function Invoke-Doctor {
     param($Entries)
 
@@ -1015,6 +1187,9 @@ function Invoke-Doctor {
         }
     }
 
+    Write-Host 'Work the dump does not have' -ForegroundColor Cyan
+    Test-CorpusDrift
+
     Write-Host 'Umbrella working tree' -ForegroundColor Cyan
     $visible = (Invoke-Git $RepoRoot @('status', '--porcelain')).Output
     $leaked = @()
@@ -1073,6 +1248,7 @@ if ($Command -eq 'db') {
     if ($PSBoundParameters.ContainsKey('Port')) { $arguments['Port'] = $Port }
     if ($PSBoundParameters.ContainsKey('Password')) { $arguments['Password'] = $Password }
     if ($PSBoundParameters.ContainsKey('DataDirName')) { $arguments['DataDirName'] = $DataDirName }
+    if ($PSBoundParameters.ContainsKey('ThumbnailDir')) { $arguments['ThumbnailDir'] = $ThumbnailDir }
     if ($Apply) { $arguments['Apply'] = $true }
     if ($Force) { $arguments['Force'] = $true }
     # Positionally, after the splatted named parameters: db.ps1 collects these in
