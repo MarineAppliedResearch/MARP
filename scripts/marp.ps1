@@ -220,6 +220,11 @@ function Write-Fail { param([string]$Message) $script:Failures++; Write-Host "  
 function Write-Warn { param([string]$Message) Write-Host "  WARN  $Message" -ForegroundColor Yellow }
 function Write-Pass { param([string]$Message) Write-Host "  ok    $Message" -ForegroundColor DarkGray }
 
+# Neither a pass nor a failure. Being ahead of the dump is the normal state while
+# work is happening, and a doctor that goes red for it is a doctor people learn
+# to ignore.
+function Write-Note { param([string]$Message) Write-Host "  note  $Message" -ForegroundColor Yellow }
+
 <#
 .SYNOPSIS
     Read services/repos.yml into an ordered list of registry entries.
@@ -1011,6 +1016,78 @@ function Invoke-Pull {
     Neither belongs in the umbrella's history, and both are awkward to undo
     later. Verifying it is cheap, so it is verified rather than assumed.
 #>
+<#
+.SYNOPSIS
+    Say whether this database holds work the newest dump does not.
+
+.DESCRIPTION
+    The one cost of making every database a reloadable copy: a review session or
+    an inference run that was never dumped is lost the next time something
+    rebuilds. This is what makes that visible *before* it matters rather than
+    after -- "you have 318 reviews the dump has not got" is a question anybody can
+    answer; noticing they are gone is not.
+
+    A note rather than a failure. Being ahead of the dump is the normal state
+    while work is happening, and doctor going red for it would teach people to
+    ignore doctor.
+
+    Counts only, and per table. Naming the individual rows would mean a query per
+    table and a schema this script does not own -- the manifest already records
+    what the dump holds, so a comparison is arithmetic on two small objects.
+#>
+function Test-CorpusDrift {
+    $apiDir = Join-Path $RepoRoot 'MARP_API'
+    $corpusRoot = Join-Path $apiDir '.marp/local/corpus'
+    $newest = Get-ChildItem -LiteralPath $corpusRoot -Directory -ErrorAction SilentlyContinue |
+        Sort-Object Name | Select-Object -Last 1
+
+    if (-not $newest) {
+        Write-Note 'no dump on this machine, so nothing to compare. Get one: marp db fetch'
+        return
+    }
+
+    $manifestPath = Join-Path $newest.FullName 'manifest.json'
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        Write-Note "$($newest.Name) has no manifest, so it cannot be compared"
+        return
+    }
+    $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+
+    # Ask the database, through the same script that knows where it is. A failure
+    # here means it is not running, which `db status` already reports properly.
+    # The table names come from marp-api's own manifest, so this script never
+    # holds a second copy of which tables a corpus consists of.
+    # Splatted, not passed as one argument. An array handed over positionally
+    # arrives in ValueFromRemainingArguments as a single item rather than as the
+    # eight names it holds, and the identifier filter then drops the lot --
+    # which looks exactly like the database being down.
+    $tables = @($manifest.counts.PSObject.Properties.Name)
+    $counts = & (Join-Path $PSScriptRoot 'db.ps1') counts -Port $Port -Password $Password @tables 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $counts) {
+        Write-Note 'the database is not running, so there is nothing to compare'
+        return
+    }
+
+    try { $live = ($counts -join "`n") | ConvertFrom-Json } catch {
+        Write-Note 'could not read the row counts'
+        return
+    }
+
+    $ahead = @()
+    foreach ($table in $manifest.counts.PSObject.Properties.Name) {
+        $there = [int]$manifest.counts.$table
+        $here = [int]$live.$table
+        if ($here -gt $there) { $ahead += "$table +$($here - $there)" }
+    }
+
+    if ($ahead.Count -eq 0) {
+        Write-Pass "nothing here that $($newest.Name) does not have"
+    } else {
+        Write-Note "this database is ahead of $($newest.Name): $($ahead -join ', ')"
+        Write-Host '         Keep it with:  marp db dump   then   marp db publish' -ForegroundColor DarkGray
+    }
+}
+
 function Invoke-Doctor {
     param($Entries)
 
@@ -1109,6 +1186,9 @@ function Invoke-Doctor {
             Write-Fail 'harness check failed -- run: .\scripts\marp.ps1 harness check'
         }
     }
+
+    Write-Host 'Work the dump does not have' -ForegroundColor Cyan
+    Test-CorpusDrift
 
     Write-Host 'Umbrella working tree' -ForegroundColor Cyan
     $visible = (Invoke-Git $RepoRoot @('status', '--porcelain')).Output

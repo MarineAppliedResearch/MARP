@@ -50,6 +50,7 @@
       publish   upload the newest dump as a release asset, so other machines get it.
       fetch     download the newest published dump, unless this machine has it.
       load      put a dump back. Dry run unless -Apply.
+      counts    row counts for the tables named after it, as JSON.
       destroy   stop the server and delete the database.
 
 .PARAMETER Command
@@ -87,7 +88,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('up', 'down', 'status', 'env', 'dump', 'publish', 'fetch', 'load', 'destroy')]
+    [ValidateSet('up', 'down', 'status', 'env', 'dump', 'publish', 'fetch', 'load', 'counts', 'destroy')]
     [string]$Command = 'status',
 
     [int]$Port = 5432,
@@ -1078,6 +1079,59 @@ function Invoke-Fetch-Corpus {
     }
 }
 
+<#
+.SYNOPSIS
+    Print a row count per named table, as JSON.
+
+.DESCRIPTION
+    For `marp doctor`, which compares what is in the database against what the
+    newest dump's manifest says it holds.
+
+    **The tables are named by the caller, never by this script.** The manifest is
+    marp-api's own artifact and it lists exactly the tables its dump carries, so
+    passing those names through keeps the schema knowledge where it belongs --
+    the same boundary `up` keeps by driving marp-api's own scripts rather than
+    holding a second copy of the schema.
+
+    Quiet on purpose: this is the one verb whose output is parsed, so nothing
+    goes to stdout but the JSON.
+#>
+function Invoke-Counts {
+    # Emits the JSON and nothing else, so the caller can capture it. A `return
+    # $true` alongside it would make this function return an *array* -- the trap
+    # this script already documents, and the reason every other verb here keeps
+    # its output on Out-Host. Failure is silence.
+    if (-not (Test-Running)) { return }
+    if (-not $Rest) { return }
+
+    $safe = $Rest | Where-Object { $_ -match '^[A-Za-z_][A-Za-z0-9_]*$' }
+    if (-not $safe) { return }
+
+    # One statement rather than one per table, and quoted so folding cannot turn
+    # a legal identifier into a missing relation.
+    $selects = ($safe | ForEach-Object { "(SELECT count(*) FROM ""$_"")" }) -join ', '
+    # Set for this call only, the way Invoke-Pg does it: an ambient PGPASSWORD
+    # leaks to everything else launched from the same shell.
+    $savedPassword = $env:PGPASSWORD
+    $env:PGPASSWORD = $Password
+    try {
+    $row = & (Join-Path $BinDir 'psql.exe') `
+        '-h' $DbHost '-p' "$Port" '-U' $Role '-d' $Database '-t' '-A' '-F' '|' `
+        '-c' "SELECT $selects" 2>$null
+    } finally {
+        if ($null -eq $savedPassword) { Remove-Item -Path 'env:PGPASSWORD' -ErrorAction SilentlyContinue }
+        else { $env:PGPASSWORD = $savedPassword }
+    }
+    if ($LASTEXITCODE -ne 0 -or -not $row) { return }
+
+    $values = ($row -join '').Trim() -split '\|'
+    if ($values.Count -ne $safe.Count) { return }
+
+    $out = [ordered]@{}
+    for ($i = 0; $i -lt $safe.Count; $i++) { $out[$safe[$i]] = [int]$values[$i] }
+    Write-Output ($out | ConvertTo-Json -Compress)
+}
+
 function Invoke-Destroy {
     Invoke-Stop
     if (-not (Test-Path -LiteralPath $DataDir)) { Write-Ok 'no database to delete'; return }
@@ -1101,5 +1155,6 @@ switch ($Command) {
     'publish' { if (-not (Invoke-Publish)) { exit 1 } }
     'fetch'   { if (-not (Invoke-Fetch-Corpus)) { exit 1 } }
     'load'    { if (-not (Invoke-Load)) { exit 1 } }
+    'counts'  { $json = Invoke-Counts; if (-not $json) { exit 1 }; Write-Output $json }
     'destroy' { Invoke-Destroy }
 }

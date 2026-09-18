@@ -173,6 +173,82 @@ function stopListener(port) {
   return true;
 }
 
+/**
+ * Run one `marp db` verb against a named database, and say whether it worked.
+ *
+ * The platform split is the same one `db(a, …)` makes further down; this one
+ * takes the parts rather than an agent record, because `start` is building that
+ * record and does not have one yet.
+ */
+function dbVerb(dbPort, name, verb, extra = []) {
+  const win = process.platform === 'win32';
+  const script = join(UMBRELLA, 'scripts', win ? 'db.ps1' : 'db.sh');
+  const args = win
+    ? ['-NoProfile', '-File', script, verb, '-Port', String(dbPort), '-DataDirName', name, ...extra]
+    : [script, verb, '--port', String(dbPort), '--data-dir', name, ...extra];
+  return spawnSync(win ? 'powershell' : 'sh', args, { stdio: 'inherit' }).status === 0;
+}
+
+/**
+ * Give this agent's database the published test corpus.
+ *
+ * An isolated copy used to come up with an empty schema, which is a working
+ * install and a useless workspace: no observations means no mosaic, so an agent
+ * sent to work on the reviewer opened it to nothing and had no way to tell
+ * whether that was the bug. It now starts with what a developer sees.
+ *
+ * Three steps and the order matters. `pg_restore` drops every table and
+ * recreates them from the dump — including `SequelizeMeta` — so a load moves the
+ * schema *back* to whatever the dump was taken at. The migrations run again
+ * afterwards to bring it forward, and that is a no-op whenever the dump is
+ * current.
+ *
+ * `--thumbnail-dir` is not optional here. The pictures belong to the database
+ * that names them, and without it the load replaces the directory this agent's
+ * parent checkout is using (MARP_API#132).
+ *
+ * Never fatal. An agent with an empty database is worth having; an agent that
+ * failed to be created is not.
+ */
+function loadCorpus(dbPort, name, dir) {
+  const win = process.platform === 'win32';
+  const flag = (n, v) => (win ? [`-${n[0].toUpperCase()}${n.slice(1)}`, v] : [`--${n}`, v]);
+
+  step('Its test corpus');
+  if (!dbVerb(dbPort, name, 'fetch')) {
+    warn('no corpus fetched; this agent starts with an empty database');
+    console.log(dim('      marp db fetch   then   marp db load <dump> <tiles> --apply'));
+    return false;
+  }
+
+  const root = join(UMBRELLA, 'MARP_API', '.marp', 'local', 'corpus');
+  const newest = existsSync(root)
+    ? readdirSync(root, { withFileTypes: true })
+        .filter((e) => e.isDirectory()).map((e) => e.name).sort().pop()
+    : null;
+  if (!newest) { warn('no dump on disk after fetching; empty database'); return false; }
+
+  const dump = join(root, newest, 'corpus.dump');
+  const tiles = join(root, newest, 'observation-thumbnails');
+  /* Its own storage/, matching the THUMBNAIL_STORAGE_DIR this agent's .env names.
+     `start` deliberately does not copy the parent's tiles in, because a load
+     replaces this directory wholesale anyway. */
+  const here = join(dir, 'storage', 'observation-thumbnails');
+
+  const applied = win
+    ? dbVerb(dbPort, name, 'load', [dump, tiles, '-Apply', ...flag('thumbnailDir', here)])
+    : dbVerb(dbPort, name, 'load', [dump, tiles, '--apply', ...flag('thumbnail-dir', here)]);
+  if (!applied) { warn('the corpus did not load; this agent has an empty database'); return false; }
+
+  // Forward again, past whatever landed since the dump was taken.
+  if (!dbVerb(dbPort, name, 'up', win ? ['-Quiet'] : [])) {
+    warn('corpus loaded but the migrations did not run; run `marp db up` for it');
+    return false;
+  }
+  ok(`corpus ${newest} loaded`);
+  return true;
+}
+
 /* --------------------------------------------------------------------- start */
 
 async function start(repoName, branch) {
@@ -227,6 +303,7 @@ async function start(repoName, branch) {
       warn('the database did not come up; the working copy is fine, fix the database and rerun `marp db up` for it');
     } else {
       ok(`database on 127.0.0.1:${dbPort}`);
+      loadCorpus(dbPort, name, dir);
     }
 
     step('.env');
@@ -292,12 +369,11 @@ async function start(repoName, branch) {
    * somebody else's working copy, which is the whole point of the isolation.
    *
    * `observation-thumbnails/` is skipped, and it is the largest thing in there — 26 MB,
-   * 2,079 files. An agent's database is built empty (`db up` is the baseline plus the
-   * migrations, never a corpus), so those files match **zero rows** from the moment they
-   * land; and if the agent later loads a corpus, `replaceThumbnails` deletes the whole
-   * directory first anyway. So they are dead weight in both cases. They were also
-   * actively harmful: `holdsCorpus` counted files rather than rows, so a provably empty
-   * second database refused a load because of pictures belonging to a different one.
+   * 2,079 files. Copying them would be wasted twice over: `loadCorpus` runs a few steps
+   * below, and `replaceThumbnails` empties this directory before filling it from the
+   * dump — so anything copied here is deleted unread. They were also actively harmful
+   * once: `holdsCorpus` counted files rather than rows, so a provably empty second
+   * database refused a load because of pictures belonging to a different one.
    */
   for (const runtime of ['storage']) {
     const from = join(repoPath, runtime);
