@@ -103,6 +103,21 @@ If a pull request did not finish an issue, say so in the pull request and leave 
 open with a comment explaining what is left; do not leave every issue open on the theory
 that somebody else will decide.
 
+## Say what an issue is, never just its number
+
+**Every time you mention an issue to the human, give its title.** `#57` alone is unreadable
+away from the tracker: it asks them to go and look something up to understand their own
+project. Write *"marp-inference-worker#57 — Volunteer control: show the worker is running"*,
+or at the very least a few words of what it is about.
+
+This holds in chat, in reports, in a plan, in a list of what to do next, and in a pull
+request body that cites another issue. It does **not** change commit messages, where
+`Refs #NN` is the convention and stays.
+
+Isaac, 2026-10-14, after a day of being handed bare numbers: *"when you mention issues, to
+also give me the title to the issue"*. The same correction had already been made once and
+did not stick, which is why it is here rather than in one agent's notes.
+
 ## The workflow, and where it stops for a human
 
 ```
