@@ -39,11 +39,43 @@ function readSpec(dir) {
   return { repos: list('repos'), needs: list('needs') };
 }
 
+/** The port the shared development database listens on. */
+const SHARED_DB_PORT = 5432;
+
+/**
+ * Which database a working copy talks to, from its own `.env`.
+ *
+ * Read from the file rather than from `.marp-agent.json`, because the copies this
+ * catches are the ones that have no `.marp-agent.json` -- and `.env` is what marp-api
+ * actually reads, so it is the only answer that cannot be out of date.
+ *
+ * @param {string} dir - The working copy.
+ * @returns {?{host: string, port: number}} Its database, or null when it names none.
+ */
+function databaseOf(dir) {
+  const path = join(dir, '.env');
+  if (!existsSync(path)) return null;
+
+  let text;
+  try { text = readFileSync(path, 'utf8'); } catch { return null; }
+
+  const port = (text.match(/^DB_PORT\s*=\s*(\d+)/m) || [])[1];
+  const host = (text.match(/^DB_HOST\s*=\s*(\S+)/m) || [])[1];
+
+  return port ? { host: host || '127.0.0.1', port: Number(port) } : null;
+}
+
 const agents = [];
+const copies = [];
+
 if (existsSync(ROOT)) {
   for (const entry of readdirSync(ROOT, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(ROOT, entry.name);
+    if (!existsSync(join(dir, '.git'))) continue;
+
+    copies.push({ name: entry.name, dir, db: databaseOf(dir) });
+
     const metaPath = join(dir, '.marp-agent.json');
     if (!existsSync(metaPath)) continue;
     try {
@@ -55,12 +87,49 @@ if (existsSync(ROOT)) {
 
 step('Agents working in parallel');
 
-if (agents.length < 2) {
-  ok(agents.length ? '1 agent set up; nothing to collide with' : 'none set up');
-  process.exit(0);
+let failures = 0;
+
+/*
+ * A working copy sharing somebody else's database.
+ *
+ * **Checked over every working copy, not over the provisioned ones.** The copies that
+ * get this wrong are exactly the ones with no `.marp-agent.json`: a desktop-app
+ * worktree, a `git worktree add` by hand, a second clone. Nothing provisions those, so
+ * marp-api falls back to `.env.example`, which names the shared development database --
+ * and nothing says so.
+ *
+ * On 2026-10-20 two agents migrated that database at once. The symptom was
+ * `db:migrate:undo` failing with "Unable to find migration" for a file that existed in
+ * the other agent's checkout, which says nothing whatever about the real cause.
+ */
+const byDatabase = new Map();
+
+for (const copy of copies) {
+  if (!copy.db) {
+    warn(`${copy.name} has no .env, so it will fall back to the shared database`);
+    console.log(`         ${dim('give it one of its own: marp agent adopt ' + copy.dir)}`);
+    continue;
+  }
+
+  if (copy.db.port === SHARED_DB_PORT) {
+    fail(`${copy.name} points at the shared development database on ${copy.db.host}:${copy.db.port}`);
+    console.log(`         ${dim('give it one of its own: marp agent adopt ' + copy.dir)}`);
+    failures++;
+
+    continue;
+  }
+
+  const key = `${copy.db.host}:${copy.db.port}`;
+  if (byDatabase.has(key)) {
+    fail(`${copy.name} and ${byDatabase.get(key)} both use the database on ${key}`);
+    failures++;
+  } else byDatabase.set(key, copy.name);
 }
 
-let failures = 0;
+if (agents.length < 2) {
+  if (!failures) ok(agents.length ? '1 agent set up; nothing to collide with' : 'none set up');
+  process.exit(failures ? 1 : 0);
+}
 
 /* Ports first: two agents on one port is not a judgement call, it is broken. */
 const byPort = new Map();
@@ -102,6 +171,10 @@ for (const [repo, branches] of byRepo) {
 }
 
 if (!failures) ok(`${agents.length} agents, no conflicting ports or exclusive resources`);
-else console.log(dim('\n    Fix with: marp agent remove <branch>, then start it again.'));
+else {
+  console.log('');
+  console.log(dim('    A shared database: marp agent adopt <directory>.'));
+  console.log(dim('    A clashing port:   marp agent remove <branch>, then start it again.'));
+}
 
 process.exit(failures ? 1 : 0);
