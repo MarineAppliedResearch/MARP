@@ -41,7 +41,7 @@ import { spawnSync, execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, cpSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createHash } from 'node:crypto';
-import { join, resolve, relative, sep } from 'node:path';
+import { join, resolve, relative, sep, basename } from 'node:path';
 import { UMBRELLA, readRegistry, step, ok, warn, fail, dim, cyan } from './lib.mjs';
 
 /** Where isolated copies live. Outside the umbrella, so it never sees them. */
@@ -57,6 +57,15 @@ const isFree = (port) => new Promise((done) => {
   s.once('listening', () => s.close(() => done(true)));
   s.listen(port, '127.0.0.1');
 });
+
+/**
+ * The port the shared development database listens on.
+ *
+ * Named rather than written into a comparison, because its whole job here is to be the
+ * value an isolated working copy must *not* be using: a copy still pointing at it has
+ * never been given a database of its own, whatever else its `.env` says.
+ */
+const SHARED_DB_PORT = 5432;
 
 async function freePort(from, taken) {
   for (let p = from; p < from + 200; p++) {
@@ -251,28 +260,42 @@ function loadCorpus(dbPort, name, dir) {
 
 /* --------------------------------------------------------------------- start */
 
-async function start(repoName, branch) {
-  const entry = readRegistry().find((e) => e.name === repoName || e.directory === repoName);
-  if (!entry) { fail(`${repoName} is not in services/repos.yml`); process.exit(2); }
-
-  const repoPath = join(UMBRELLA, entry.directory);
-  if (!existsSync(join(repoPath, '.git'))) {
-    fail(`${entry.directory} is not cloned. Run: marp clone ${entry.name}`);
-    process.exit(2);
+/**
+ * Give a working copy its own ports, its own database and its own `.env`.
+ *
+ * **Split out of `start` because `start` is not the only way a working copy appears.**
+ * A desktop-app worktree, a `git worktree add` by hand, or a second clone all produce a
+ * perfectly good checkout with no `.marp-agent.json` and no `.env` of its own -- so it
+ * falls back to `.env.example`, which names the shared development database on 5432.
+ * Two agents then migrate and test against one database without either being told, which
+ * is how a `SequelizeMeta` row for a migration file that does not exist in this checkout
+ * turned up on 2026-10-20 and broke `db:migrate:undo`.
+ *
+ * Idempotent in the way that matters: it refuses rather than overwriting an `.env` that
+ * already names a port of its own, because that file is the only record of which database
+ * holds this copy's work.
+ *
+ * @param {Object} options
+ * @param {string} options.dir - The working copy.
+ * @param {string} options.name - Its workspace name, used for the data directory.
+ * @param {string} options.branch - The branch it is on.
+ * @param {Object} options.entry - Its `services/repos.yml` entry.
+ * @param {string} options.repoPath - The main checkout, to carry shared settings from.
+ * @returns {Promise<{apiPort: number, dbPort: ?number}>} The ports it was given.
+ */
+async function provision({ dir, name, branch, entry, repoPath }) {
+  /* An `.env` naming a port that is not the shared 5432 is this copy's own, and it is
+     the only record of which database holds its work. Overwriting it would strand that
+     work in a database nothing points at any more. */
+  const envPath = join(dir, '.env');
+  if (existsSync(envPath)) {
+    const current = readFileSync(envPath, 'utf8');
+    const port = (current.match(/^DB_PORT\s*=\s*(\d+)/m) || [])[1];
+    if (port && port !== String(SHARED_DB_PORT)) {
+      fail(`${dir} already has its own database on 127.0.0.1:${port}. Nothing changed.`);
+      process.exit(1);
+    }
   }
-
-  const name = `${entry.directory}--${slug(branch)}`;
-  const dir = join(ROOT, name);
-  if (existsSync(dir)) { fail(`${dir} already exists. Use: marp agent remove ${branch}`); process.exit(1); }
-
-  const base = entry.default_branch || 'develop';
-  step(`${entry.name}: ${branch} from origin/${base}`);
-
-  git(['fetch', 'origin', base], repoPath);
-  mkdirSync(ROOT, { recursive: true });
-  const add = git(['worktree', 'add', '-b', branch, dir, `origin/${base}`], repoPath);
-  if (add.status !== 0) { fail((add.stderr || '').trim()); process.exit(1); }
-  ok(dir);
 
   /* Ports first, so the .env below is written once and is correct. */
   const taken = new Set(readAgents().flatMap((a) => [a.apiPort, a.dbPort]));
@@ -355,6 +378,34 @@ async function start(repoName, branch) {
     writeFileSync(join(dir, '.env'), env.join('\n'));
     ok('.env written');
   }
+
+  return { apiPort, dbPort };
+}
+
+async function start(repoName, branch) {
+  const entry = readRegistry().find((e) => e.name === repoName || e.directory === repoName);
+  if (!entry) { fail(`${repoName} is not in services/repos.yml`); process.exit(2); }
+
+  const repoPath = join(UMBRELLA, entry.directory);
+  if (!existsSync(join(repoPath, '.git'))) {
+    fail(`${entry.directory} is not cloned. Run: marp clone ${entry.name}`);
+    process.exit(2);
+  }
+
+  const name = `${entry.directory}--${slug(branch)}`;
+  const dir = join(ROOT, name);
+  if (existsSync(dir)) { fail(`${dir} already exists. Use: marp agent remove ${branch}`); process.exit(1); }
+
+  const base = entry.default_branch || 'develop';
+  step(`${entry.name}: ${branch} from origin/${base}`);
+
+  git(['fetch', 'origin', base], repoPath);
+  mkdirSync(ROOT, { recursive: true });
+  const add = git(['worktree', 'add', '-b', branch, dir, `origin/${base}`], repoPath);
+  if (add.status !== 0) { fail((add.stderr || '').trim()); process.exit(1); }
+  ok(dir);
+
+  await provision({ dir, name, branch, entry, repoPath });
 
   /*
    * Runtime directories that are git-ignored, so a fresh copy gets the empty shell.
@@ -564,6 +615,61 @@ function remove(branch) {
   ok(`working copy gone. The branch ${a.branch} is kept — delete it yourself if it is finished.`);
 }
 
+/**
+ * Give an existing working copy its own database, ports and `.env`.
+ *
+ * `start` creates a working copy and provisions it in one go. **Nothing provisioned a
+ * copy that already existed**, and copies arrive other ways all the time -- the desktop
+ * app makes a git worktree per session, somebody runs `git worktree add`, somebody
+ * clones twice. Those get no `.marp-agent.json` and no `.env`, so marp-api falls back to
+ * `.env.example` and every one of them talks to the shared development database on
+ * 127.0.0.1:5432.
+ *
+ * Nothing said so. Two agents migrated the same database on 2026-10-20 -- one of them
+ * left a `SequelizeMeta` row naming a migration file the other did not have, which broke
+ * `db:migrate:undo` with an error about a missing file rather than about a shared
+ * database. That is the failure this command exists to prevent, and `marp harness check`
+ * now reports the condition rather than waiting for it to surface as something else.
+ *
+ * @param {string} [where] - The working copy. Defaults to the current directory.
+ * @returns {Promise<void>}
+ */
+async function adopt(where) {
+  const dir = resolve(where || process.cwd());
+
+  if (!existsSync(join(dir, '.git'))) {
+    fail(`${dir} is not a git working copy.`);
+    process.exit(2);
+  }
+
+  if (existsSync(join(dir, '.marp-agent.json'))) {
+    fail(`${dir} was already set up by \`marp agent start\`. Nothing changed.`);
+    process.exit(1);
+  }
+
+  /* Which repository this is, so the shared settings come from the right main checkout
+     and the data directory is named the way `start` would have named it. */
+  const entry = readRegistry().find((e) => existsSync(join(dir, '.git'))
+    && basename(dir).startsWith(`${e.directory}--`));
+
+  if (!entry) {
+    fail(`${basename(dir)} does not start with a registry directory name, so which repository `
+      + 'it is cannot be told. Rename it <DIRECTORY>--<branch>, or use `marp agent start`.');
+    process.exit(2);
+  }
+
+  const repoPath = join(UMBRELLA, entry.directory);
+  const branch = (git(['rev-parse', '--abbrev-ref', 'HEAD'], dir).stdout || '').trim() || 'unknown';
+  const name = basename(dir);
+
+  step(`${entry.name}: adopting ${name} on ${branch}`);
+
+  const { apiPort, dbPort } = await provision({ dir, name, branch, entry, repoPath });
+
+  ok(`adopted. Its API is ${apiPort}${dbPort ? ` and its database is 127.0.0.1:${dbPort}` : ''}.`);
+  console.log(dim('  Restart anything that was already running here: it is holding the old settings.'));
+}
+
 /* ------------------------------------------------------------------ dispatch */
 
 const [sub, ...rest] = process.argv.slice(2);
@@ -574,6 +680,8 @@ if (sub === 'start') {
   await start(repo, branch);
 } else if (sub === 'list' || !sub) {
   list();
+} else if (sub === 'adopt') {
+  await adopt(rest[0]);
 } else if (sub === 'env') {
   if (!rest[0]) { fail('usage: marp agent env <branch>'); process.exit(2); }
   env(rest[0]);
@@ -586,6 +694,6 @@ if (sub === 'start') {
   remove(rest[0]);
 } else {
   fail(`unknown: marp agent ${sub}`);
-  console.log(dim('  start | list | env | stop [--all] | remove'));
+  console.log(dim('  start | adopt | list | env | stop [--all] | remove'));
   process.exit(2);
 }
