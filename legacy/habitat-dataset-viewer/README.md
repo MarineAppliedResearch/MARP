@@ -36,8 +36,9 @@ listens on this machine only.
   is one with no usable frame. Clicking the timeline opens the nearest frame.
 - **Full frame**: click any frame. The arrow keys step through the filtered list. It
   darkens the top quarter, the ROV's overlay, which the trainer cuts off so the model cannot
-  learn a dive from its date and depth, and outlines the bottom-middle crop that one of the
-  training runs uses.
+  learn a dive from its date and depth, and outlines the habitat crop: the bottom half of
+  the frame, middle half of its width, which the model is trained on and the Mosaic's
+  habitat pictures show (`CROPS["habitat"]` in `train.py`).
 
 ## How it works
 
