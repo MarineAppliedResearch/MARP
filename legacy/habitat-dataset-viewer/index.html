@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Habitat dataset</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --text: #1d2330; --muted: #667085; --line: #dde1e7;
+    --rock: #5b6b82; --mud: #8a5a35; --sand: #d9a92b; --cobble: #2a9d8f; --boulder: #7b5cc4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #98a2b3; --line: #2c323d; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, sans-serif; }
+  header, main { max-width: 1400px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: baseline; }
+  h1 { font-size: 20px; margin: 0; }
+  .muted { color: var(--muted); }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 14px; }
+  .summary { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; }
+  @media (max-width: 800px) { .summary { grid-template-columns: 1fr; } }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: right; padding: 3px 8px; border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums; }
+  th:first-child, td:first-child { text-align: left; }
+  .bar { display: grid; grid-template-columns: 70px 1fr 110px; gap: 8px; align-items: center; margin: 4px 0; }
+  .bar .track { background: var(--line); border-radius: 3px; height: 12px; overflow: hidden; }
+  .bar .fill { height: 100%; }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; }
+  label { display: inline-flex; gap: 6px; align-items: center; }
+  select, button { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+  button { cursor: pointer; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: pointer; }
+  .card img, .card .missing { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; background: var(--line); }
+  .card .missing { display: grid; place-items: center; color: var(--muted); }
+  .card .info { padding: 6px 8px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 3px; }
+  .chip { color: #fff; font-size: 12px; padding: 1px 7px; border-radius: 10px; }
+  .meta { font-size: 12px; color: var(--muted); }
+  .more { display: block; margin: 16px auto; }
+  svg text { fill: var(--muted); font-size: 11px; }
+  .timeline svg { width: 100%; height: auto; cursor: crosshair; }
+  dialog { border: 0; padding: 0; background: transparent; max-width: 96vw; }
+  dialog::backdrop { background: rgb(0 0 0 / 0.8); }
+  .viewer { background: var(--panel); color: var(--text); border-radius: 8px; padding: 10px; }
+  .frame { position: relative; }
+  .frame img { display: block; max-width: 92vw; max-height: 78vh; }
+  .shade, .crop { position: absolute; pointer-events: none; font-size: 12px; color: #fff; padding: 4px 6px; }
+  .shade { left: 0; top: 0; width: 100%; height: 25%; background: rgb(0 0 0 / 0.55); }
+  .crop { left: 25%; top: 50%; width: 50%; height: 50%; border: 2px dashed #fff; }
+  .frame.plain .shade, .frame.plain .crop { display: none; }
+  .viewer .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-top: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Habitat dataset</h1>
+  <label>Dataset <select id="dataset"></select></label>
+  <span id="count" class="muted"></span>
+</header>
+<main>
+  <div class="summary">
+    <section class="panel"><strong>Frames by year and split</strong><table id="splits"></table></section>
+    <section class="panel"><strong>Frames showing each substrate</strong> <span class="muted">(after filters; a frame can show several)</span><div id="bars"></div></section>
+  </div>
+  <section class="panel filters">
+    <label>Year <select id="year"></select></label>
+    <label>Split <select id="split"></select></label>
+    <label>Substrate <select id="substrate"></select></label>
+    <label>Showing <select id="mode">
+      <option value="has">that substrate, maybe with others</option>
+      <option value="only">that substrate alone</option>
+      <option value="not">anything but that substrate</option>
+    </select></label>
+    <label>Dive and line <select id="session"></select></label>
+  </section>
+  <section class="panel timeline" id="timeline" hidden></section>
+  <div class="grid" id="grid"></div>
+  <button class="more" id="more" hidden>Show more</button>
+</main>
+<dialog id="dialog">
+  <div class="viewer">
+    <div class="frame" id="frame"><img id="big" alt="">
+      <div class="shade">Overlay, cut off before the model sees the frame</div>
+      <div class="crop">Habitat crop</div>
+    </div>
+    <div class="row">
+      <div><div class="chips" id="bigChips"></div><div class="meta" id="bigMeta"></div></div>
+      <div>
+        <label><input type="checkbox" id="showCrop" checked> Show what the model sees</label>
+        <button id="prev">&larr; Previous</button> <button id="next">Next &rarr;</button> <button id="close">Close</button>
+      </div>
+    </div>
+  </div>
+</dialog>
+<script>
+const CLASSES = ['Rock', 'Mud', 'Sand', 'Cobble', 'Boulder'];
+const SPLITS = ['train', 'val', 'test'];
+const SPLIT_NAMES = { train: 'training', val: 'tuning', test: 'test (never trained on)' };
+const COLOR = Object.fromEntries(CLASSES.map((c) => [c, `var(--${c.toLowerCase()})`]));
+const PAGE = 60;
+const $ = (id) => document.getElementById(id);
+
+let rows = [], filtered = [], shown = 0, open = -1;
+
+// Quoted fields are allowed, in case a video name ever carries a comma.
+function parseCsv(text) {
+  const out = []; let row = [], field = '', quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else field += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(field); field = ''; }
+    else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(field); field = '';
+      if (row.length > 1) out.push(row);
+      row = [];
+    } else field += ch;
+  }
+  if (field || row.length) { row.push(field); out.push(row); }
+  const [head, ...body] = out;
+  return body.map((r) => Object.fromEntries(head.map((h, i) => [h, r[i]])));
+}
+
+const labels = (r) => CLASSES.filter((c) => r[c] === '1');
+const where = (r) => `${r.project} · dive ${r.dive} · line ${r.line}`;
+const clock = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+const chips = (r) => labels(r).map((c) => `<span class="chip" style="background:${COLOR[c]}">${c}</span>`).join('')
+  || '<span class="muted">no substrate</span>';
+const options = (sel, values, all) => { sel.innerHTML = `<option value="">${all}</option>` + values.map(([v, t]) => `<option value="${v}">${t}</option>`).join(''); };
+
+async function load(name) {
+  rows = parseCsv(await (await fetch(`/data/${encodeURIComponent(name)}`)).text());
+  rows.forEach((r) => { r.seconds = Number(r.seconds_into_video); });
+  // In dive order, then along the video: a page of the grid reads like the dive did.
+  rows.sort((a, b) => a.project.localeCompare(b.project) || Number(a.dive) - Number(b.dive)
+    || Number(a.session) - Number(b.session) || a.seconds - b.seconds);
+  options($('year'), [...new Set(rows.map((r) => r.project))].sort().map((p) => [p, p]), 'All years');
+  options($('split'), SPLITS.map((s) => [s, SPLIT_NAMES[s]]), 'All splits');
+  options($('substrate'), CLASSES.map((c) => [c, c]), 'Any');
+  sessions();
+  apply();
+}
+
+// The dive list follows the year, so it stays short enough to use.
+function sessions() {
+  const year = $('year').value, seen = new Map();
+  for (const r of rows) if (!year || r.project === year) seen.set(r.session, r);
+  options($('session'), [...seen.values()].map((r) => [r.session, `${where(r)} (${r.split})`]), 'All');
+}
+
+function apply() {
+  const year = $('year').value, split = $('split').value, sub = $('substrate').value, mode = $('mode').value, session = $('session').value;
+  filtered = rows.filter((r) => {
+    if (year && r.project !== year) return false;
+    if (split && r.split !== split) return false;
+    if (session && r.session !== session) return false;
+    if (!sub) return true;
+    const ls = labels(r);
+    if (mode === 'has') return ls.includes(sub);
+    if (mode === 'only') return ls.length === 1 && ls[0] === sub;
+    return !ls.includes(sub);
+  });
+  $('count').textContent = `${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} frames`;
+  summary();
+  timeline(session);
+  $('grid').innerHTML = '';
+  shown = 0;
+  more();
+}
+
+function summary() {
+  const years = [...new Set(filtered.map((r) => r.project))].sort();
+  const n = (p, s) => filtered.filter((r) => (!p || r.project === p) && (!s || r.split === s)).length;
+  $('splits').innerHTML = `<tr><th>Year</th>${SPLITS.map((s) => `<th>${SPLIT_NAMES[s]}</th>`).join('')}<th>All</th></tr>`
+    + years.map((p) => `<tr><td>${p}</td>${SPLITS.map((s) => `<td>${n(p, s).toLocaleString()}</td>`).join('')}<td>${n(p).toLocaleString()}</td></tr>`).join('')
+    + `<tr><th>All</th>${SPLITS.map((s) => `<th>${n(null, s).toLocaleString()}</th>`).join('')}<th>${filtered.length.toLocaleString()}</th></tr>`;
+  $('bars').innerHTML = CLASSES.map((c) => {
+    const k = filtered.filter((r) => r[c] === '1').length, pct = filtered.length ? (100 * k) / filtered.length : 0;
+    return `<div class="bar"><span>${c}</span><div class="track"><div class="fill" style="width:${pct}%;background:${COLOR[c]}"></div></div><span class="muted">${k.toLocaleString()} (${pct.toFixed(0)}%)</span></div>`;
+  }).join('');
+}
+
+// One dive's labels laid out along its video, the way the annotations were recorded.
+// Each frame stands for the 10 s around it; a blank stretch has no usable frame.
+function timeline(session) {
+  const box = $('timeline');
+  const these = session ? filtered : [];
+  box.hidden = !these.length;
+  if (!these.length) return;
+  const W = 1000, ROW = 20, LEFT = 70, top = 8;
+  const t0 = Math.min(...these.map((r) => r.seconds)) - 5, t1 = Math.max(...these.map((r) => r.seconds)) + 5;
+  const x = (s) => LEFT + ((s - t0) / (t1 - t0)) * (W - LEFT);
+  let svg = '';
+  CLASSES.forEach((c, i) => {
+    svg += `<text x="0" y="${top + i * ROW + 14}">${c}</text>`;
+    for (const r of these) if (r[c] === '1') {
+      svg += `<rect x="${x(r.seconds - 5)}" y="${top + i * ROW}" width="${Math.max(x(r.seconds + 5) - x(r.seconds - 5), 1)}" height="${ROW - 4}" fill="${COLOR[c]}"/>`;
+    }
+  });
+  const H = top + CLASSES.length * ROW;
+  const step = (t1 - t0) > 1800 ? 300 : 60;
+  for (let s = Math.ceil(t0 / step) * step; s <= t1; s += step) {
+    svg += `<line x1="${x(s)}" x2="${x(s)}" y1="${top}" y2="${H}" stroke="var(--line)"/><text x="${x(s)}" y="${H + 14}" text-anchor="middle">${clock(s)}</text>`;
+  }
+  box.innerHTML = `<strong>${where(these[0])}</strong> <span class="muted">${these[0].video}, ${SPLIT_NAMES[these[0].split]}. Click the timeline to open the nearest frame.</span>`
+    + `<svg viewBox="0 0 ${W} ${H + 20}" id="tl">${svg}</svg>`;
+  $('tl').addEventListener('click', (e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const s = t0 + (((e.clientX - rect.left) / rect.width) * W - LEFT) / (W - LEFT) * (t1 - t0);
+    let best = 0;
+    filtered.forEach((r, i) => { if (Math.abs(r.seconds - s) < Math.abs(filtered[best].seconds - s)) best = i; });
+    show(best);
+  });
+}
+
+function more() {
+  const grid = $('grid');
+  for (const [i, r] of filtered.slice(shown, shown + PAGE).entries()) {
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `<img loading="lazy" alt="" src="/${r.image}"><div class="info"><div class="chips">${chips(r)}</div>`
+      + `<div class="meta">${where(r)} · ${clock(r.seconds)} · ${r.split}</div></div>`;
+    // A frame the download has not reached yet says so, rather than showing a broken picture.
+    card.querySelector('img').onerror = (e) => { e.target.outerHTML = '<div class="missing">not downloaded yet</div>'; };
+    const at = shown + i;
+    card.onclick = () => show(at);
+    grid.appendChild(card);
+  }
+  shown = Math.min(shown + PAGE, filtered.length);
+  $('more').hidden = shown >= filtered.length;
+  $('more').textContent = `Show more (${(filtered.length - shown).toLocaleString()} left)`;
+}
+
+function show(i) {
+  if (i < 0 || i >= filtered.length) return;
+  open = i;
+  const r = filtered[i];
+  $('big').src = `/${r.image}`;
+  $('bigChips').innerHTML = chips(r);
+  $('bigMeta').textContent = `${where(r)} · ${r.video} at ${clock(r.seconds)} · ${SPLIT_NAMES[r.split]} · frame ${i + 1} of ${filtered.length.toLocaleString()}`;
+  if (!$('dialog').open) $('dialog').showModal();
+}
+
+$('dataset').onchange = () => load($('dataset').value);
+$('year').onchange = () => { sessions(); apply(); };
+for (const id of ['split', 'substrate', 'mode', 'session']) $(id).onchange = apply;
+$('more').onclick = more;
+$('prev').onclick = () => show(open - 1);
+$('next').onclick = () => show(open + 1);
+$('close').onclick = () => $('dialog').close();
+$('showCrop').onchange = (e) => $('frame').classList.toggle('plain', !e.target.checked);
+document.addEventListener('keydown', (e) => {
+  if (!$('dialog').open) return;
+  if (e.key === 'ArrowLeft') show(open - 1);
+  if (e.key === 'ArrowRight') show(open + 1);
+});
+
+(async () => {
+  const names = await (await fetch('/datasets')).json();
+  $('dataset').innerHTML = names.map((n) => `<option>${n}</option>`).join('');
+  if (names.includes('dataset_full.csv')) $('dataset').value = 'dataset_full.csv';
+  if (names.length) load($('dataset').value);
+})();
+</script>
+</body>
+</html>
